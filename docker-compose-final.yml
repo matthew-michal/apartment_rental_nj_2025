@@ -1,0 +1,164 @@
+version: '3.8'
+
+volumes: 
+  grafana_data: {}
+  postgres_data: {}
+  prefect_data: {}
+
+networks:
+  front-tier:
+  back-tier:
+  prefect-tier:
+
+services:
+  # PostgreSQL database for monitoring metrics AND Prefect
+  db:
+    image: postgres:13
+    restart: always
+    environment:
+      POSTGRES_DB: apartment_monitoring
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: example
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_db_fixed.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks:
+      - back-tier
+      - prefect-tier
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d apartment_monitoring && pg_isready -U postgres -d prefect_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Adminer for database administration
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - "8080:8080"
+    networks:
+      - back-tier
+      - front-tier
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Grafana for monitoring dashboards
+  grafana:
+    image: grafana/grafana-enterprise:latest
+    user: "472"
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana_datasources.yaml:/etc/grafana/provisioning/datasources/datasource.yaml:ro
+      - ./config/grafana_dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      - ./dashboards:/opt/grafana/dashboards:ro
+    networks:
+      - back-tier
+      - front-tier
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Prefect Server - FIXED HEALTH CHECK
+  prefect-server:
+    image: prefecthq/prefect:2.20.20-python3.9
+    restart: always
+    volumes:
+      - prefect_data:/root/.prefect
+    environment:
+      - PREFECT_API_URL=http://0.0.0.0:4200/api
+      - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://postgres:example@db:5432/prefect_db
+      - PREFECT_SERVER_API_HOST=0.0.0.0
+      - PREFECT_SERVER_API_PORT=4200
+    ports:
+      - "4200:4200"
+    networks:
+      - prefect-tier
+      - back-tier
+    depends_on:
+      db:
+        condition: service_healthy
+    command: prefect server start --host 0.0.0.0 --port 4200
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4200/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ML Pipeline Container
+  ml-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+      - /tmp:/tmp
+    environment:
+      - PREFECT_API_URL=http://prefect-server:4200/api
+      - AWS_PROFILE=default
+      - AWS_REGION=us-east-1
+    networks:
+      - prefect-tier
+      - back-tier
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    command: tail -f /dev/null  # Keep container running
+
+  # Prefect Agent
+  prefect-agent:
+    image: prefecthq/prefect:2.20.20-python3.9
+    restart: always
+    volumes:
+      - ./:/app
+      - ~/.aws:/root/.aws:ro  # Mount AWS credentials
+    environment:
+      - PREFECT_API_URL=http://prefect-server:4200/api
+      - AWS_PROFILE=default
+      - AWS_REGION=us-east-1
+    networks:
+      - prefect-tier
+      - back-tier
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    command: prefect agent start --work-queue ml-pipeline
+
+  # Optional: Prometheus for additional metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - back-tier
+    restart: always
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
