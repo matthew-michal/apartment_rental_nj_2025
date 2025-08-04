@@ -1,0 +1,177 @@
+service: apartment-ml-pipeline
+
+frameworkVersion: '4'
+
+provider:
+  name: aws
+  runtime: python3.9
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  timeout: 900
+  memorySize: 3008
+  
+  environment:
+    MLFLOW_BUCKET: mlflow-artifact-mmichal
+    TRAINING_BUCKET: training-data-bucket-mmichal-apartments-nj
+    MLFLOW_TRACKING_URI: ${ssm:/ml-pipeline/mlflow-uri}
+    SNS_TOPIC_ARN: !Ref MLPipelineAlertsTopic
+  
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+            - s3:ListBucket
+          Resource: 
+            - "arn:aws:s3:::mlflow-artifact-mmichal"
+            - "arn:aws:s3:::mlflow-artifact-mmichal/*"
+            - "arn:aws:s3:::training-data-bucket-mmichal-apartments-nj"
+            - "arn:aws:s3:::training-data-bucket-mmichal-apartments-nj/*"
+        
+        - Effect: Allow
+          Action:
+            - ssm:GetParameter
+            - ssm:GetParameters
+          Resource: 
+            - "arn:aws:ssm:${self:provider.region}:*:parameter/ml-pipeline/*"
+        
+        - Effect: Allow
+          Action:
+            - cloudwatch:PutMetricData
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+          Resource: "*"
+        
+        - Effect: Allow
+          Action:
+            - sns:Publish
+          Resource: !Ref MLPipelineAlertsTopic
+
+# Aggressive package exclusion to reduce size
+package:
+  patterns:
+    - '!**'  # Exclude everything by default
+    # Include only essential Python files
+    - '*.py'
+    - 'requirements.txt'
+    # Exclude common large directories and files
+    - '!.git/**'
+    - '!.serverless/**'
+    - '!node_modules/**'
+    - '!__pycache__/**'
+    - '!.pytest_cache/**'
+    - '!*.pyc'
+    - '!*.pyo'
+    - '!*.pyd'
+    - '!venv/**'
+    - '!env/**'
+    - '!.venv/**'
+    - '!training-data/**'
+    - '!models/**'
+    - '!data/**'
+    - '!logs/**'
+    - '!dashboards/**'
+    - '!config/**'
+    - '!docker-compose.yml'
+    - '!Dockerfile*'
+    - '!*.sh'
+    - '!*.sql'
+    - '!*.md'
+    - '!*.csv'
+    - '!*.json'
+    - '!package*.json'
+    - '!.DS_Store'
+    - '!*.log'
+    - '!*.tmp'
+    - '!*.cache'
+    - '!tests/**'
+    - '!.coverage'
+    - '!.tox/**'
+    - '!dist/**'
+    - '!build/**'
+    - '!*.egg-info/**'
+
+functions:
+  dailyPredictions:
+    handler: lambda_daily_run.lambda_handler
+    timeout: 900
+    memorySize: 2048
+    events:
+      - schedule: 
+          rate: cron(0 12 * * ? *)
+          input:
+            source: "scheduled-daily"
+            type: "predictions"
+    layers:
+      - arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python39:8
+
+  weeklyTraining:
+    handler: lambda_training.lambda_handler
+    timeout: 900
+    memorySize: 3008
+    events:
+      - schedule: 
+          rate: cron(0 6 ? * SUN *)
+          input:
+            source: "scheduled-training"
+            type: "model_training"
+    layers:
+      - arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python39:8
+
+resources:
+  Resources:
+    MLPipelineAlertsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ml-pipeline-alerts-${self:provider.stage}
+        DisplayName: "ML Pipeline Alerts"
+    
+    MLPipelineAlertsSubscription:
+      Type: AWS::SNS::Subscription
+      Properties:
+        Protocol: email
+        TopicArn: !Ref MLPipelineAlertsTopic
+        Endpoint: matthew.michal11@gmail.com
+
+plugins:
+  - serverless-python-requirements
+
+custom:
+  pythonRequirements:
+    dockerizePip: true  # Enable Docker for better dependency management
+    zip: true
+    slim: true
+    strip: true
+    invalidateCaches: true
+    fileName: requirements.txt
+    # Use Docker to build dependencies
+    dockerImage: public.ecr.aws/sam/build-python3.9:latest
+    # Exclude packages available in AWS layers
+    noDeps:
+      - boto3
+      - botocore
+      - pandas
+      - numpy
+    # More aggressive optimization
+    pipCmdExtraArgs:
+      - --no-cache-dir
+      - --disable-pip-version-check
+      - --compile
+      - --no-deps
+    # Remove unnecessary files from packages
+    slimPatterns:
+      - '**/*.py[c|o]'
+      - '**/__pycache__*'
+      - '**/*.dist-info*'
+      - '**/*.egg-info*'
+      - '**/tests/**'
+      - '**/test/**'
+      - '**/docs/**'
+      - '**/examples/**'
+      - '**/*.md'
+      - '**/*.txt'
+      - '**/*.rst'

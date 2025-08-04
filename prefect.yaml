@@ -1,0 +1,62 @@
+# Welcome to your prefect.yaml file! You can use this file for storing and managing
+# configuration for deploying your flows. We recommend committing this file to source
+# control along with your flow code.
+
+# Generic metadata about this project
+name: Deployment Test
+prefect-version: 2.20.20
+
+# build section allows you to manage and build docker images
+build:
+
+# push section allows you to manage if and how this project is uploaded to remote locations
+push:
+
+# pull section allows you to provide instructions for cloning this project in remote locations
+pull:
+- prefect.deployments.steps.set_working_directory:
+    directory: C:\Users\matth\Documents\Python Projects\Deployment Test
+
+# the deployments section allows you to provide configuration for deploying flows
+deployments:
+- name: working-apartment-analysis
+  version:
+  tags: []
+  description: Simple test flow for apartment analysis
+  entrypoint: windows_test_flow.py:apartment_analysis_flow
+  parameters: {}
+  work_pool:
+    name: default-process-pool
+    work_queue_name:
+    job_variables: {}
+  schedules: []
+- name: daily-apartment-predictions
+  version:
+  tags: []
+  description: Daily apartment predictions pipeline
+  entrypoint: ml_pipeline_flows.py:daily_predictions_flow
+  parameters: {}
+  work_pool:
+    name: default-process-pool
+    work_queue_name:
+    job_variables: {}
+  schedules:
+  - cron: 0 5 * * *
+    timezone: America/New_York
+    day_or: true
+    active: true
+- name: weekly-model-training
+  version:
+  tags: []
+  description: Weekly model training pipeline
+  entrypoint: ml_pipeline_flows.py:weekly_training_flow
+  parameters: {}
+  work_pool:
+    name: default-process-pool
+    work_queue_name:
+    job_variables: {}
+  schedules:
+  - cron: 0 1 * * 0
+    timezone: America/New_York
+    day_or: true
+    active: true

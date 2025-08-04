@@ -1,0 +1,21 @@
+apiVersion: 1
+
+datasources:
+  - name: PostgreSQL-Apartment-Monitoring
+    type: postgres
+    access: proxy
+    url: db:5432  # Use service name for Docker networking
+    database: apartment_monitoring
+    user: postgres
+    secureJsonData:
+      password: example
+    jsonData:
+      sslmode: disable  # For local development
+      maxOpenConns: 100
+      maxIdleConns: 100
+      maxIdleConnsAuto: true
+      connMaxLifetime: 14400
+      postgresVersion: 1300
+      timescaledb: false
+    uid: postgres-apartment-monitoring
+    isDefault: true
