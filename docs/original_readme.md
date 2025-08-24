@@ -1,6 +1,6 @@
 # 🏠 Apartment ML Pipeline with Monitoring & Orchestration
 
-A comprehensive machine learning pipeline for North New Jersey apartment rental price prediction featuring real-time monitoring, automated orchestration, and intelligent alerting.
+A comprehensive machine learning pipeline for North New Jersey apartment rental price prediction featuring real-time monitoring, automated orchestration, and intelligent alerting. I built this repo to help a friend find an apartment in North NJ along the Morristown/Gladstone train line as they commute to NYC for work.
 
 ## 🎯 What This Pipeline Does
 
@@ -80,7 +80,7 @@ apartment-ml-pipeline/
 ### Option 1: Automated Deployment (Recommended)
 ```bash
 # Clone repository
-git clone <your-repository>
+git clone https://github.com/matthew-michal/apartment_rental_nj_2025.git
 cd apartment-ml-pipeline
 
 # Make deployment script executable
@@ -130,12 +130,12 @@ GF_SECURITY_ADMIN_PASSWORD=admin
 
 # AWS Configuration (update with your values)
 AWS_REGION=us-east-1
-MLFLOW_BUCKET=mlflow-artifact-mmichal
-TRAINING_BUCKET=training-data-bucket-mmichal-apartments-nj
+MLFLOW_BUCKET=mlflow-bucket
+TRAINING_BUCKET=training-data
 
 # Email Configuration
-SENDER_EMAIL=matthew.michal11@gmail.com
-RECIPIENT_EMAIL=matthew.michal11@gmail.com
+SENDER_EMAIL=sender@gmail.com
+RECIPIENT_EMAIL=recipient@gmail.com
 ```
 
 ### 🔒 Production Configuration (Important!)
@@ -579,28 +579,6 @@ You'll know the pipeline is working correctly when:
 - ✅ Model performance metrics remain stable
 - ✅ Data drift scores stay within acceptable ranges
 - ✅ Prefect flows complete successfully without manual intervention
-
-## 🎈 Next Steps
-
-### Immediate (First Week)
-1. **Customize Email Recipients**: Update `email_options.py` with your preferred contacts
-2. **Add Your API Key**: Set `API_KEY` in `.env` for live data
-3. **Configure Alerts**: Set up Grafana notifications for your thresholds
-4. **Test End-to-End**: Run manual flow execution to verify everything works
-
-### Short Term (First Month)
-1. **Expand Coverage**: Add new geographical areas or property types
-2. **Improve Features**: Add commute times, school ratings, crime data
-3. **Business Rules**: Customize "good deal" logic for your market
-4. **Performance Tuning**: Optimize for your specific data volume
-
-### Long Term (3-6 Months)
-1. **Advanced Models**: Experiment with deep learning approaches
-2. **Real-Time Processing**: Implement streaming pipeline for immediate alerts
-3. **Mobile App**: Build mobile interface for deal notifications
-4. **Multi-Market**: Expand to other metro areas
-
----
 
 ## 📄 License & Usage
 
