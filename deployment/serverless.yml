@@ -55,6 +55,9 @@ provider:
 package:
   patterns:
     - '!**'  # Exclude everything by default
+    - 'lambda/**'  # Include lambda folder
+    - '../src/**'  # Include src folder
+    - '../data/training/training_base.csv'  # Include base training data
     # Include only essential Python files
     - '*.py'
     - 'requirements.txt'

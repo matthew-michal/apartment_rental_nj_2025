@@ -2,6 +2,7 @@
 import json
 import os
 import boto3
+import sys
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
@@ -14,6 +15,7 @@ from training_model import find_station
 from initial_data_pull_test import data_pull
 from email_options import send_predictions_email
 from monitoring_config import MLPipelineMonitor
+from src.data.accumulator import TrainingDataAccumulator
 
 from evidently import ColumnMapping
 from evidently.report import Report
@@ -24,6 +26,9 @@ from evidently.metrics import (
     ColumnSummaryMetric,
     RegressionQualityMetric
 )
+
+# sys.path.append('/app')  # For Docker/Lambda
+sys.path.append('../../')  # For local development
 
 # Initialize AWS clients
 s3_client = boto3.client('s3')
@@ -439,6 +444,13 @@ def predict_and_monitor(df, pipeline, reference_data):
     results_file = f'predictions_{current_date}.csv'  # Current directory
     df.to_csv(results_file, index=False)
     s3_client.upload_file(results_file, MLFLOW_BUCKET, f'predictions/predictions_{current_date}.csv')
+
+    try:
+        accumulator = TrainingDataAccumulator()
+        accumulation_stats = accumulator.add_daily_predictions(df)
+        print(f"✅ Training data accumulated: {accumulation_stats}")
+    except Exception as e:
+        print(f"⚠️ Training accumulation failed: {e}")
 
     # Send email
     try:

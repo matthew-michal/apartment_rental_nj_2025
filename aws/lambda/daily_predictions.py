@@ -5,12 +5,11 @@ This imports from the deployment lambda file but with proper path handling.
 import sys
 import os
 
-# Add paths for imports
-sys.path.append('/app')  # For AWS Lambda
-sys.path.append('/app/deployment/lambda')  # For the original lambda file
-sys.path.append('../../deployment/lambda')  # For local testing
+# Add proper path handling
+sys.path.append('/app')
+sys.path.append('/app/deployment/lambda')
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../deployment/lambda'))
 
-# Import the original lambda handler
 from lambda_daily_run import lambda_handler
 
 # Re-export the handler (this is what AWS will call)

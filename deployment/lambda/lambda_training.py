@@ -1,18 +1,24 @@
-# lambda_training.py - Updated for your AWS setup
-
 import json
 import os
 import boto3
+import sys
 import numpy as np
 from datetime import datetime
 import pandas as pd
 import mlflow
 from sklearn.model_selection import train_test_split
-from training_model import (
+from pathlib import Path
+
+# Add paths for the new file structure
+sys.path.append('/app')  # For Docker/Lambda
+sys.path.append('../../')  # For local development
+
+# Updated imports to match new structure
+from src.models.training import (
     LabelEncoderTransformer, find_station, tune_models, 
     train_model, create_X
 )
-from monitoring_config import MLPipelineMonitor
+from src.monitoring.config import MLPipelineMonitor
 
 # Initialize AWS clients and monitor
 s3_client = boto3.client('s3')
@@ -39,23 +45,53 @@ def make_json_safe(obj):
     else:
         return obj
 
-def download_training_data():
-    """Download training data from your S3 bucket"""
+def download_training_data(use_accumulated=True):
+    """Download training data - use accumulated if available, otherwise base data"""
     try:
-        print("Downloading training data from S3...")
+        print("Loading training data...")
         
-        # Use forward slashes and avoid temp directory issues
-        local_file = 'training_load.csv'  # Use current directory instead of /tmp
-        s3_client.download_file(TRAINING_BUCKET, 'training_load.csv', local_file)
+        # Check for accumulated data first (if use_accumulated is True)
+        accumulated_path = Path('data/training/training_accumulated.csv')
+        base_path = Path('data/training/training_base.csv')
         
-        # Load data
-        df = pd.read_csv(local_file)
+        if use_accumulated and accumulated_path.exists():
+            # Use accumulated data (grows over time from daily predictions)
+            df = pd.read_csv(accumulated_path)
+            print(f"📈 Using accumulated training data: {df.shape}")
+            data_source = "accumulated"
+        else:
+            # Try to download from S3 first, then fallback to local
+            try:
+                # Download base training data from S3
+                local_file = 'training_base.csv'
+                s3_client.download_file(TRAINING_BUCKET, 'training_load.csv', local_file)
+                df = pd.read_csv(local_file)
+                print(f"☁️ Downloaded base training data from S3: {df.shape}")
+                data_source = "s3_base"
+            except:
+                # Fallback to local base data if S3 fails
+                if base_path.exists():
+                    df = pd.read_csv(base_path)
+                    print(f"📊 Using local base training data: {df.shape}")
+                    data_source = "local_base"
+                else:
+                    # Last resort - try old filename
+                    df = pd.read_csv('training_load.csv')
+                    print(f"📊 Using legacy training data: {df.shape}")
+                    data_source = "legacy"
         
-        print(f"Training data loaded: {df.shape}")
         print(f"Data columns: {list(df.columns)}")
         
+        # Remove duplicates (important for accumulated data)
+        initial_size = len(df)
+        df = df.drop_duplicates(subset=['id'], keep='last')
+        final_size = len(df)
+        
+        if initial_size != final_size:
+            print(f"🧹 Removed {initial_size - final_size} duplicates during loading")
+        
         # Log data quality
-        monitor.log_data_quality_metrics(df, 'training_data')
+        monitor.log_data_quality_metrics(df, f'training_data_{data_source}')
         
         return df
         

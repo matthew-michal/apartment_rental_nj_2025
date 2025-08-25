@@ -6,6 +6,8 @@ import json
 
 # Import your existing Lambda functions
 try:
+    import sys
+    sys.path.append('../deployment/lambda')
     from lambda_daily_run import lambda_handler as daily_handler
     from lambda_training import lambda_handler as training_handler
 except ImportError as e:

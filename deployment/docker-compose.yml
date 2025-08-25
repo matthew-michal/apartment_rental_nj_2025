@@ -24,7 +24,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init_db_fixed.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ../config/database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
     networks:
       - back-tier
       - prefect-tier
@@ -62,9 +62,9 @@ services:
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./config/grafana_datasources.yaml:/etc/grafana/provisioning/datasources/datasource.yaml:ro
-      - ./config/grafana_dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
-      - ./dashboards:/opt/grafana/dashboards:ro
+      - ../config/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasource.yaml:ro
+      - ../config/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      - ../dashboards:/opt/grafana/dashboards:ro
     networks:
       - back-tier
       - front-tier
@@ -112,12 +112,13 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     volumes:
-      - ./:/app
-      - /tmp:/tmp
+     - ../:/app  # Mount entire project
+     - ../data:/app/data
     environment:
       - PREFECT_API_URL=http://prefect-server:4200/api
       - AWS_PROFILE=default
       - AWS_REGION=us-east-1
+      - PYTHONPATH=/app
     networks:
       - prefect-tier
       - back-tier
