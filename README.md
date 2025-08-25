@@ -1,14 +1,14 @@
-# 🏠 Apartment ML Pipeline with Monitoring & Orchestration
+# 🏠 North NJ Apartment ML Pipeline
 
-A comprehensive machine learning pipeline for North New Jersey apartment rental price prediction featuring real-time monitoring, automated orchestration, and intelligent alerting.
+A comprehensive machine learning pipeline for North New Jersey apartment rental price prediction featuring real-time monitoring, automated training data accumulation, and intelligent alerting. Built to help find underpriced rentals along the Morristown/Gladstone train line for NYC commuters.
 
 ## 🎯 What This Pipeline Does
 
-- **🔄 Daily Predictions**: Automatically pulls fresh apartment listings and predicts fair market prices
-- **📊 Weekly Training**: Retrains models with hyperparameter optimization using latest market data
-- **🔍 Data Quality Monitoring**: Real-time drift detection using Evidently AI
+- **📈 Growing Dataset**: Automatically accumulates daily prediction data (1.3k+ rows/day) to improve model training over time
+- **🔄 Daily Predictions**: Pulls fresh apartment listings and predicts fair market prices with drift monitoring
+- **📊 Weekly Training**: Retrains models using accumulated data with hyperparameter optimization
+- **📧 Smart Alerts**: Email notifications for good deals (apartments >$100 under predicted price)
 - **📈 Interactive Dashboards**: Grafana visualizations for pipeline health and business metrics
-- **📧 Smart Alerts**: Email notifications for good deals, data issues, and system failures
 - **🚀 Flexible Deployment**: Run locally with Docker or deploy to AWS Lambda
 - **⚡ Workflow Orchestration**: Prefect flows for reliable, observable pipeline execution
 
@@ -16,617 +16,558 @@ A comprehensive machine learning pipeline for North New Jersey apartment rental 
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Data Sources  │    │  Prefect Flows   │    │   Monitoring    │
-│                 │───▶│                  │───▶│                 │
-│ • Rentcast API  │    │ • Daily Preds    │    │ • Evidently AI  │
-│ • NJ Listings   │    │ • Weekly Training│    │ • Grafana       │
-└─────────────────┘    │ • Email Alerts   │    │ • PostgreSQL    │
+│   Data Sources  │    │  Daily Pipeline  │    │   Training      │
+│                 │───►│                  │───►│                 │
+│ • Rentcast API  │    │ • 1.3k new rows │    │ • Accumulated   │
+│ • NJ Listings   │    │ • Predictions    │    │   data (8k→50k) │
+└─────────────────┘    │ • Accumulation   │    │ • Weekly retrain│
                        └──────────────────┘    └─────────────────┘
                                 │                        │
                                 ▼                        ▼
                        ┌──────────────────┐    ┌─────────────────┐
-                       │   ML Pipeline    │    │   Storage       │
+                       │   Monitoring     │    │   Storage       │
                        │                  │    │                 │
-                       │ • XGBoost Model  │    │ • S3 Buckets    │
-                       │ • Hyperopt Tuning│    │ • MLflow        │
-                       │ • Station Features│    │ • Model Registry│
+                       │ • Evidently AI  │    │ • S3 Buckets    │
+                       │ • Grafana       │    │ • MLflow        │
+                       │ • PostgreSQL    │    │ • Model Registry│
                        └──────────────────┘    └─────────────────┘
 ```
 
 ## 📁 Project Structure
 
 ```
-apartment-ml-pipeline/
-├── 🚀 Quick Start
-│   ├── deployment_script.sh         # One-click deployment
-│   ├── docker-compose-final.yml     # Full service orchestration
-│   └── .env                         # Environment configuration
-├── 🤖 ML Pipeline Core
-│   ├── training_model.py            # XGBoost training with Hyperopt
-│   ├── lambda_daily_run.py          # Daily predictions + monitoring
-│   ├── lambda_training.py           # Weekly model retraining
-│   ├── ml_pipeline_flows.py         # Prefect workflow definitions
-│   └── initial_data_pull_test.py    # Rentcast API integration
-├── 📊 Monitoring & Alerting
-│   ├── monitoring_config.py         # CloudWatch + SNS alerting
-│   ├── email_options.py            # Email notification system
-│   └── init_db_fixed.sql           # Database schema + sample data
-├── 🎨 Dashboards & Config
-│   ├── config/
-│   │   ├── grafana_datasources.yaml
-│   │   ├── grafana_dashboards.yaml
-│   │   └── prometheus.yml
-│   └── dashboards/
-├── ☁️ Cloud Deployment (Optional)
-│   ├── serverless.yml              # AWS Lambda deployment
-│   ├── requirements.txt            # Python dependencies
-│   ├── prefect.yaml               # Prefect deployment config
-│   └── package.json               # Serverless plugins
-└── 📄 Data & Documentation
-    ├── cached_data.csv             # Sample apartment data
-    ├── training_load.csv           # Training dataset
-    ├── reference_data.csv          # Drift detection reference
-    └── run_id.txt                  # Latest model run ID
+apartment-rental-nj-2025/
+├── 🚀 deployment/
+│   ├── lambda/
+│   │   ├── lambda_daily_run.py         # Daily predictions with accumulation
+│   │   └── lambda_training.py          # Weekly training with accumulated data
+│   ├── docker-compose.yml              # Full service orchestration
+│   ├── deploy.sh                       # One-click deployment
+│   ├── serverless.yml                  # AWS Lambda deployment
+│   └── requirements.txt                # Python dependencies
+├── 📁 aws/
+│   ├── lambda/
+│   │   ├── daily_predictions.py        # Clean AWS wrapper
+│   │   └── weekly_training.py          # Clean AWS wrapper
+│   └── requirements.txt                # AWS-specific minimal deps
+├── 📁 src/
+│   ├── data/
+│   │   ├── collection.py               # Rentcast API integration
+│   │   └── accumulator.py              # Training data accumulation
+│   ├── models/
+│   │   └── training.py                 # XGBoost training with Hyperopt
+│   ├── monitoring/
+│   │   └── config.py                   # CloudWatch + SNS alerting
+│   └── utils/
+│       └── email.py                    # Email notification system
+├── 📁 workflows/
+│   └── prefect_flows.py                # Prefect workflow definitions
+├── 📁 config/
+│   ├── database/
+│   │   └── init.sql                    # Database schema + sample data
+│   └── grafana/
+│       ├── datasources.yml             # Grafana data connections
+│       └── dashboards.yml              # Dashboard provisioning
+├── 📁 data/
+│   ├── training/
+│   │   ├── training_base.csv           # Base 8k training data
+│   │   └── training_accumulated.csv    # Growing dataset (created automatically)
+│   ├── reference/
+│   │   └── reference_data.csv          # Drift detection reference
+│   ├── daily/                          # Daily prediction results
+│   └── cache/                          # Run IDs and metadata
+├── 📁 dashboards/
+│   └── apartment_monitoring_dashboard.json
+└── 📁 scripts/
+    └── setup.sh                        # Environment setup script
 ```
 
-## 🚀 Quick Start (5 Minutes)
+## 🚀 Quick Start (Complete Walkthrough)
 
-### Prerequisites
-- **Docker** & **Docker Compose** installed
-- **Python 3.9+** 
-- **Git** for cloning
-- **API key** for live data (optional - works with sample data)
-
-### Option 1: Automated Deployment (Recommended)
+### Step 1: Prerequisites
 ```bash
-# Clone repository
-git clone <your-repository>
-cd apartment-ml-pipeline
+# Install required tools
+# - Docker & Docker Compose
+# - Python 3.9+
+# - Git
+# - Optional: Pipenv for environment management
 
-# Make deployment script executable
-chmod +x deployment_script.sh
-
-# Run one-click deployment
-./deployment_script.sh
+# Verify installations
+docker --version
+docker-compose --version
+python --version
+git --version
 ```
 
-The script will:
-- ✅ Check prerequisites (Docker, Docker Compose)
-- ✅ Create directory structure
-- ✅ Generate `.env` file with defaults
-- ✅ Start all services (PostgreSQL, Grafana, Prefect, etc.)
-- ✅ Setup sample data for immediate testing
-- ✅ Provide access URLs and next steps
-
-### Option 2: Manual Setup
+### Step 2: Clone and Setup
 ```bash
-# Clone and navigate
-git clone <your-repository>
-cd apartment-ml-pipeline
+# Clone the repository
+git clone https://github.com/matthew-michal/apartment_rental_nj_2025.git
+cd apartment-rental-nj-2025
 
+# Set up Python environment (choose one)
+# Option A: Using Pipenv (recommended)
+pip install pipenv
+pipenv install -r requirements.txt
+pipenv shell
+
+# Option B: Using pip
+pip install -r requirements.txt
+
+# Make scripts executable
+chmod +x deployment/deploy.sh
+chmod +x scripts/setup.sh
+```
+
+### Step 3: Environment Configuration
+```bash
 # Create environment file
-cp .env.example .env  # Edit with your values
+cp .env.example .env
 
-# Start services
-docker-compose -f docker-compose-final.yml up -d
-
-# Wait for services to be ready (2-3 minutes)
-docker-compose ps
+# Edit .env with your settings (required for production):
+nano .env
 ```
 
-## 🔧 Environment Configuration
-
-### Generated .env File
-The deployment script creates a `.env` file with these defaults:
-
+**Critical .env variables to update:**
 ```bash
 # Database Configuration
-POSTGRES_DB=apartment_monitoring
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=example
+POSTGRES_PASSWORD=your_secure_password
 
-# Grafana Configuration
-GF_SECURITY_ADMIN_PASSWORD=admin
-
-# AWS Configuration (update with your values)
-AWS_REGION=us-east-1
-MLFLOW_BUCKET=mlflow-artifact-mmichal
-TRAINING_BUCKET=training-data-bucket-mmichal-apartments-nj
-
-# Email Configuration
-SENDER_EMAIL=matthew.michal11@gmail.com
-RECIPIENT_EMAIL=matthew.michal11@gmail.com
-```
-
-### 🔒 Production Configuration (Important!)
-**Update these values before production use:**
-
-```bash
-# 1. Secure your passwords
-POSTGRES_PASSWORD=your_secure_database_password
-GF_SECURITY_ADMIN_PASSWORD=your_grafana_admin_password
-
-# 2. Update AWS resources (if using cloud deployment)
+# AWS Configuration (for cloud deployment)
 MLFLOW_BUCKET=your-unique-mlflow-bucket
 TRAINING_BUCKET=your-unique-training-bucket
 
-# 3. Configure email settings
+# Email Configuration (for deal alerts)
 SENDER_EMAIL=your-email@gmail.com
-RECIPIENT_EMAIL=recipient@gmail.com
+RECIPIENT_EMAIL=your-email@gmail.com
 
-# 4. Add API key for live data (optional)
+# API Configuration (optional - works with sample data)
 API_KEY=your_rentcast_api_key
+```
+
+### Step 4: Deploy Locally
+```bash
+# Run the automated deployment
+cd deployment
+./deploy.sh
+
+# This will:
+# ✅ Start PostgreSQL, Grafana, Prefect services
+# ✅ Create database schema with sample data
+# ✅ Set up monitoring infrastructure
+# ✅ Provide access URLs
+```
+
+### Step 5: Verify Deployment
+```bash
+# Check service status
+docker-compose ps
+
+# All services should show "Up" status
+# If any show "Exit 1", check logs:
+docker-compose logs <service-name>
+
+# Test key services
+curl http://localhost:3000  # Grafana
+curl http://localhost:4200/health  # Prefect
 ```
 
 ## 🌐 Service Access
 
-After deployment, access your services:
+After successful deployment:
 
 | Service | URL | Credentials | Purpose |
 |---------|-----|-------------|---------|
-| **🎨 Grafana Dashboard** | http://localhost:3000 | admin / admin | ML pipeline monitoring |
-| **🗄️ Database Admin** | http://localhost:8080 | - | PostgreSQL management |
+| **📈 Grafana Dashboard** | http://localhost:3000 | admin / admin | ML pipeline monitoring |
+| **🗄️ Database Admin** | http://localhost:8080 | postgres / example | PostgreSQL management |
 | **⚡ Prefect UI** | http://localhost:4200 | - | Workflow orchestration |
 | **📊 Prometheus** | http://localhost:9090 | - | Metrics collection |
 
-### 🎯 Your First Look at the Dashboard
-1. Go to http://localhost:3000
-2. Login with `admin` / `admin`
-3. Navigate to **Dashboards** → **Apartment ML Pipeline Monitoring**
-4. See real-time metrics with sample data!
+### 🎯 First Look at Your Dashboard
+1. **Open Grafana**: Go to http://localhost:3000
+2. **Login**: Use `admin` / `admin`
+3. **Navigate**: Dashboards → Apartment ML Pipeline Monitoring
+4. **Explore**: See real-time metrics with sample data
 
-**Key Panels to Watch:**
-- **Data Drift Over Time**: Should stay below 0.3
-- **Good Deals Found**: Business KPI tracking
-- **Model Performance**: MAE and RMSE trends
-- **Daily Data Volume**: Listings processed
+**Key Panels to Monitor:**
+- **Data Drift Over Time**: Monitor model performance degradation
+- **Good Deals Found**: Track business value delivered
+- **Daily Data Volume**: Ensure consistent data flow
+- **Training Data Growth**: Watch dataset expand over time
 
-## 🤖 Prefect Orchestration
+## 🤖 Pipeline Operations
 
-### Flow Definitions
-This pipeline includes three main Prefect flows:
+### Understanding the Data Flow
 
-1. **`daily_predictions_flow`**: 
-   - Pulls fresh apartment data
-   - Makes price predictions
-   - Monitors data drift
-   - Sends email alerts for good deals
+**Daily Operations (Automated):**
+1. **6:00 AM EST**: Prefect triggers daily predictions
+2. **Data Collection**: ~1,300 new apartment listings pulled from Rentcast API
+3. **Predictions**: ML model predicts fair market price for each listing
+4. **Good Deals**: Identifies apartments >$100 under predicted price
+5. **Email Alert**: Sends top deals to your email
+6. **Data Accumulation**: Adds daily data to growing training dataset
+7. **Monitoring**: Updates Grafana dashboard with latest metrics
 
-2. **`weekly_training_flow`**:
-   - Retrains ML model with latest data
-   - Performs hyperparameter tuning
-   - Updates model registry
-   - Validates performance
+**Weekly Training (Sunday 1:00 AM EST):**
+1. **Data Loading**: Uses accumulated dataset (starts at 8k, grows to 50k+)
+2. **Feature Engineering**: Adds train station proximity and other features
+3. **Hyperparameter Tuning**: Optimizes XGBoost parameters with Hyperopt
+4. **Model Training**: Trains new model with latest data
+5. **Model Deployment**: Replaces old model for next week's predictions
+6. **Performance Validation**: Ensures model quality hasn't degraded
 
-3. **`full_ml_pipeline`**:
-   - Runs complete pipeline (training + predictions)
-   - Useful for initial setup or major updates
+### Manual Pipeline Execution
 
-### Setting Up Prefect Flows
-
-#### Deploy Flows
+**Run Daily Predictions:**
 ```bash
-# Install Prefect (if not already installed)
-pip install prefect==2.20.20
+# Using Docker (recommended)
+cd deployment
+docker-compose exec ml-pipeline python -c "
+import sys; sys.path.append('/app')
+from deployment.lambda.lambda_daily_run import lambda_handler
+result = lambda_handler({'source': 'manual'}, None)
+print(result)
+"
 
-# Deploy daily predictions
-prefect deployment build ml_pipeline_flows.py:daily_predictions_flow \
-  -n "daily-apartment-predictions" \
-  -q "ml-pipeline"
-prefect deployment apply daily_predictions_flow-deployment.yaml
-
-# Deploy weekly training
-prefect deployment build ml_pipeline_flows.py:weekly_training_flow \
-  -n "weekly-model-training" \
-  -q "ml-pipeline"
-prefect deployment apply weekly_training_flow-deployment.yaml
+# Using Prefect UI
+# 1. Go to http://localhost:4200
+# 2. Navigate to Deployments
+# 3. Run "daily-apartment-predictions"
 ```
 
-#### Default Schedule
-The flows are configured with these schedules:
-- **Daily Predictions**: 5:00 AM EST daily (`0 5 * * *`)
-- **Weekly Training**: 1:00 AM EST Sundays (`0 1 * * 0`)
-
-#### Manual Execution
+**Run Weekly Training:**
 ```bash
-# Run daily predictions manually
-prefect deployment run "daily-apartment-predictions"
+# Using Docker
+cd deployment  
+docker-compose exec ml-pipeline python -c "
+import sys; sys.path.append('/app')
+from deployment.lambda.lambda_training import lambda_handler
+result = lambda_handler({'source': 'manual'}, None)  
+print(result)
+"
 
-# Run weekly training manually
-prefect deployment run "weekly-model-training"
-
-# Or use the Prefect UI at http://localhost:4200
+# Using Prefect UI
+# Run "weekly-model-training" deployment
 ```
 
-## 📊 Monitoring & Alerting
+### Training Data Accumulation Feature
 
-### Evidently AI Monitoring
-The pipeline tracks these data quality metrics:
-- **Prediction Drift**: Changes in model predictions over time
-- **Target Drift**: Distribution shifts in actual apartment prices
-- **Feature Drift**: Changes in input feature distributions
-- **Missing Values**: Data completeness monitoring
-- **Model Performance**: MAE, RMSE tracking
+**How It Works:**
+- **Week 1**: Model trains on base 8,000 apartment listings
+- **Week 2**: Model trains on 8,000 + ~9,100 new listings = ~17,100 total
+- **Week 3**: Model trains on 8,000 + ~18,200 new listings = ~26,200 total
+- **Month 3**: Could have 50,000+ listings for much better predictions
 
-### Alert Thresholds
-| Metric | Warning Threshold | Critical Threshold |
-|--------|-------------------|-------------------|
-| **Prediction Drift** | > 0.2 | > 0.5 |
-| **Drifted Columns** | > 2 | > 5 |
-| **Missing Values** | > 10% | > 20% |
-| **MAE (Price)** | > $150 | > $250 |
-| **Daily Volume** | < 100 listings | < 50 listings |
+**Monitor Growth:**
+```bash
+# Check current training data size
+docker-compose exec ml-pipeline python -c "
+import sys; sys.path.append('/app')
+from src.data.accumulator import TrainingDataAccumulator
+accumulator = TrainingDataAccumulator()
+accumulator.get_training_stats()
+"
+```
 
-### CloudWatch Integration (AWS)
-When deployed to AWS, the pipeline automatically sends metrics to CloudWatch:
-- Custom namespace: `MLPipeline/ApartmentRent`
-- SNS alerts for failures and quality issues
-- Automated scaling based on processing volume
+**Reset if Needed:**
+```bash
+# Reset to base dataset (removes accumulated data)
+docker-compose exec ml-pipeline python -c "
+import sys; sys.path.append('/app')
+from src.data.accumulator import TrainingDataAccumulator
+accumulator = TrainingDataAccumulator()
+accumulator.reset_accumulated_data()
+"
+```
 
-## 🔄 Data Flow
+## 📧 Email Notifications Setup
 
-### Daily Operation
-1. **6:00 AM**: Prefect triggers daily predictions flow
-2. **6:05 AM**: Fresh data pulled from Rentcast API
-3. **6:10 AM**: ML model makes price predictions
-4. **6:15 AM**: Evidently calculates drift metrics
-5. **6:20 AM**: Results stored in PostgreSQL
-6. **6:25 AM**: Email sent with good deals (apartments >$100 under predicted)
-7. **6:30 AM**: Grafana dashboard updates with new metrics
+### Configure Email Alerts
+1. **Update .env file:**
+```bash
+SENDER_EMAIL=your-gmail@gmail.com
+RECIPIENT_EMAIL=your-email@gmail.com  # Can be different
+```
 
-### Weekly Training
-1. **Sunday 1:00 AM**: Training flow triggered
-2. **1:05 AM**: Latest apartment data collected
-3. **1:10 AM**: Feature engineering (station proximity, etc.)
-4. **1:15 AM**: Hyperparameter optimization with Hyperopt
-5. **1:45 AM**: Best model trained and registered in MLflow
-6. **2:00 AM**: Model performance validation
-7. **2:05 AM**: New model deployed for daily predictions
+2. **Gmail Setup (if using Gmail):**
+   - Enable 2-factor authentication
+   - Generate app password: Google Account → Security → App passwords
+   - Use app password in AWS SSM parameter (for cloud) or update code
+
+3. **Test Email:**
+```bash
+docker-compose exec ml-pipeline python -c "
+import sys; sys.path.append('/app')
+from src.utils.email import send_predictions_email
+import pandas as pd
+test_df = pd.DataFrame({'price_preds': [2500], 'price': [2400], 'price_diff': [100]})
+send_predictions_email(test_df, 'your@email.com', 'sender@gmail.com', 'password')
+"
+```
 
 ## ☁️ AWS Cloud Deployment (Optional)
 
 ### Prerequisites
 ```bash
-# Install Serverless Framework
+# Install AWS tools
 npm install -g serverless
-npm install --save-dev serverless-python-requirements
+npm install serverless-python-requirements
+pip install awscli
 
 # Configure AWS credentials
 aws configure
 ```
 
-### Deploy to AWS
+### Deploy to AWS Lambda
 ```bash
-# Set up AWS SSM parameters (secure storage)
+# Set up secure parameter storage
 aws ssm put-parameter --name "/ml-pipeline/mlflow-uri" --value "your-mlflow-uri" --type "String"
 aws ssm put-parameter --name "/ml-pipeline/api-key" --value "your-api-key" --type "SecureString"
 aws ssm put-parameter --name "/ml-pipeline/email-password" --value "your-email-password" --type "SecureString"
 
-# Deploy with Serverless Framework
+# Deploy functions
+cd deployment
 serverless deploy --verbose
 
 # Verify deployment
 aws lambda list-functions --query 'Functions[?contains(FunctionName, `apartment-ml-pipeline`)]'
 ```
 
-### AWS Resources Created
-- **Lambda Functions**: `dailyPredictions`, `weeklyTraining`
-- **S3 Buckets**: MLflow artifacts, training data
-- **SNS Topic**: `ml-pipeline-alerts` for notifications
-- **IAM Roles**: Least-privilege access for Lambda functions
-- **CloudWatch**: Custom metrics and log retention
+**AWS Resources Created:**
+- **Lambda Functions**: Daily predictions (12:00 PM UTC) and weekly training (6:00 AM UTC Sunday)
+- **S3 Buckets**: MLflow artifacts and training data storage
+- **SNS Topic**: Alert notifications
+- **CloudWatch**: Custom metrics and automated monitoring
+- **IAM Roles**: Secure access permissions
 
-## 🛠️ Development & Testing
+## 🔧 Development & Troubleshooting
 
-### Test Individual Components
+### Common Issues & Solutions
+
+**🐳 Docker Services Won't Start:**
 ```bash
-# Test data pulling
-python initial_data_pull_test.py
-
-# Test model training locally
-python training_model.py
-
-# Test Prefect flows
-python ml_pipeline_flows.py
-
-# Test email notifications
-python -c "from email_options import quick_send_csv; import pandas as pd; quick_send_csv(pd.DataFrame({'test': [1]}), 'your@email.com', 'sender@email.com', 'password')"
-```
-
-### View Logs & Debug
-```bash
-# Docker service logs
-docker-compose logs -f grafana
-docker-compose logs -f prefect-server
-docker-compose logs -f db
-
-# Prefect flow logs
-prefect flow-run logs <flow-run-id>
-
-# Database debugging
-docker-compose exec db psql -U postgres -d apartment_monitoring
-SELECT * FROM apartment_metrics ORDER BY timestamp DESC LIMIT 10;
-```
-
-### Local Development Setup
-```bash
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Set environment variables
-export PREFECT_API_URL="http://localhost:4200/api"
-export AWS_PROFILE="default"
-
-# Run flows locally
-python ml_pipeline_flows.py
-```
-
-## 🔍 Troubleshooting
-
-### Common Issues
-
-#### 🐳 Docker Services Won't Start
-```bash
-# Check status
+# Check service status
 docker-compose ps
 
-# View logs
-docker-compose logs <service-name>
+# View specific service logs
+docker-compose logs grafana
+docker-compose logs prefect-server
+docker-compose logs db
 
 # Restart all services
 docker-compose down && docker-compose up -d
 
-# Reset completely (removes data)
+# Nuclear option (removes all data)
 docker-compose down -v && docker-compose up -d
 ```
 
-#### 🗄️ Database Connection Issues
+**🗄️ Database Connection Issues:**
 ```bash
 # Test database connectivity
 docker-compose exec db pg_isready -U postgres
 
-# Check if databases exist
-docker-compose exec db psql -U postgres -l
-
-# Connect manually
+# Connect to database manually
 docker-compose exec db psql -U postgres -d apartment_monitoring
+
+# Check if sample data exists
+SELECT COUNT(*) FROM apartment_metrics;
 ```
 
-#### ⚡ Prefect Flow Issues
+**📈 Grafana Dashboard Not Loading:**
+```bash
+# Restart Grafana
+docker-compose restart grafana
+
+# Check if datasource is configured
+# Go to Grafana → Configuration → Data Sources
+# Should see "PostgreSQL-Apartment-Monitoring" as default
+
+# Re-import dashboard if needed
+# Dashboards → Import → Upload apartment_monitoring_dashboard.json
+```
+
+**⚡ Prefect Flows Not Running:**
 ```bash
 # Check Prefect server health
 curl http://localhost:4200/health
 
-# View agent status
-prefect agent ls
-
-# Check work queues
-prefect work-queue ls
+# Check agent status
+docker-compose logs prefect-agent
 
 # Restart Prefect services
 docker-compose restart prefect-server prefect-agent
 ```
 
-#### 🎨 Grafana Dashboard Problems
+**📧 Email Notifications Not Working:**
 ```bash
-# Restart Grafana
-docker-compose restart grafana
-
-# Test datasource connection
-# Go to Grafana → Configuration → Data Sources → Test
-
-# Re-import dashboard
-# Dashboards → Import → Upload apartment_monitoring_dashboard.json
-```
-
-#### 📧 Email Notifications Not Working
-```bash
-# Check email configuration in .env
-cat .env | grep EMAIL
-
-# Test email settings
+# Test email configuration
 python -c "
 import smtplib
 server = smtplib.SMTP('smtp.gmail.com', 587)
 server.starttls()
 server.login('your-email@gmail.com', 'your-app-password')
-print('Email connection successful!')
+print('✅ Email connection successful!')
 server.quit()
 "
 ```
 
-### Performance Issues
-
-#### High Memory Usage
-```yaml
-# In docker-compose-final.yml, adjust resources:
-ml-pipeline:
-  deploy:
-    resources:
-      limits:
-        memory: 4G
-        cpus: '2.0'
-```
-
-#### Slow Predictions
-```python
-# In ml_pipeline_flows.py, process data in batches:
-@task
-def process_predictions_batch(df, batch_size=1000):
-    # Process data in smaller chunks
-    for i in range(0, len(df), batch_size):
-        batch = df.iloc[i:i+batch_size]
-        # Process batch...
-```
-
-## 🔒 Security & Best Practices
-
-### 1. Secure Your Installation
+### View Logs & Debug
 ```bash
-# Change default passwords (update .env)
-POSTGRES_PASSWORD=your_very_secure_password_here
-GF_SECURITY_ADMIN_PASSWORD=your_grafana_admin_password
+# Pipeline execution logs
+docker-compose logs -f ml-pipeline
 
-# Set proper permissions
-chmod 600 .env
+# Database query debugging
+docker-compose exec db psql -U postgres -d apartment_monitoring -c "
+SELECT timestamp, good_deals_count, avg_predicted_price 
+FROM apartment_metrics 
+ORDER BY timestamp DESC 
+LIMIT 5;"
+
+# Check training data growth
+ls -la data/training/
+# Should see training_base.csv and training_accumulated.csv (after first run)
 ```
 
-### 2. API Key Security
-```bash
-# Never commit API keys to git
-echo ".env" >> .gitignore
-echo "*.key" >> .gitignore
+### Performance Monitoring
 
-# Use environment variables
-export API_KEY="your_api_key_here"
-```
+**Key Metrics to Watch:**
+- **Data Drift Score**: Should stay < 0.3 (yellow warning), < 0.5 (red alert)
+- **Daily Volume**: Consistent 1000+ listings per day
+- **Model Performance**: MAE should stay ~$120-180
+- **Good Deals**: 5-15 deals per day is typical
+- **Training Data Growth**: Should increase ~1300 rows/day
 
-### 3. Production Security Checklist
-- [ ] Change all default passwords
-- [ ] Enable SSL/TLS for Grafana
-- [ ] Configure firewall rules
-- [ ] Set up VPN access if needed
-- [ ] Regular security updates
-- [ ] Monitor access logs
+## 📊 Understanding Your Results
 
-## 🎯 Business Value & Use Cases
+### What Constitutes a "Good Deal"?
+- **Price Difference**: Actual rent is >$100 less than predicted fair market price
+- **Example**: Model predicts $2,800, actual listing is $2,650 = $150 good deal
+- **Quality Control**: Model accuracy typically within $120-180 (MAE)
 
-### For Real Estate Professionals
-- **Market Intelligence**: Identify underpriced properties automatically
-- **Portfolio Analysis**: Monitor price trends across different areas
-- **Client Alerts**: Automated notifications for good deals matching criteria
+### Interpreting Dashboard Metrics
 
-### For Property Investors
-- **Deal Flow**: Daily email updates with investment opportunities
-- **Market Timing**: Understand when to buy based on price predictions
-- **Risk Management**: Data drift alerts indicate market changes
+**Data Drift Over Time:**
+- **Green (< 0.2)**: Model performing well, no action needed
+- **Yellow (0.2-0.5)**: Monitor closely, consider retraining soon  
+- **Red (> 0.5)**: Significant market changes, retrain immediately
 
-### For Data Scientists
-- **Production ML**: End-to-end pipeline with monitoring
-- **Drift Detection**: Real-world implementation of data quality monitoring
-- **A/B Testing**: Framework for testing model improvements
+**Good Deals Found:**
+- **5-15/day**: Normal market conditions
+- **20+/day**: Hot market or model needs calibration
+- **0-2/day**: Expensive market period or data quality issues
 
-## 📈 Performance Metrics
+**Training Data Growth:**
+- **Week 1**: ~8,000 rows (base data)
+- **Month 1**: ~25,000 rows (3x growth)
+- **Month 3**: ~50,000+ rows (6x growth, much better predictions)
 
-### Typical Performance
-- **Data Processing**: ~1,000 listings in 2-3 minutes
-- **Model Training**: ~5-10 minutes for hyperparameter tuning
-- **Prediction Accuracy**: MAE typically $120-180 for NJ market
-- **System Uptime**: >99% with proper monitoring
-
-### Scalability
-- **Current Capacity**: Handles 5,000+ daily listings
-- **Storage**: Efficient data retention (30 days monitoring, 1 year training data)
-- **Cost**: ~$20-50/month on AWS for moderate usage
-
-## 🤝 Contributing & Customization
+## 🎯 Customization & Extensions
 
 ### Adding New Features
 ```bash
 # Create feature branch
-git checkout -b feature/new-monitoring-metric
+git checkout -b feature/new-analysis
 
-# Add your changes
-# Update configuration files as needed
+# Example: Add school district scoring
+# 1. Update src/data/collection.py to pull school data
+# 2. Update src/models/training.py to include school features  
+# 3. Update monitoring for new feature drift
 
-# Test locally
-docker-compose up -d
-
-# Submit pull request
+# Test locally before deploying
+docker-compose exec ml-pipeline python test_new_feature.py
 ```
 
-### Custom Dashboards
-1. Create dashboard in Grafana UI
-2. Export JSON: Settings → JSON Model → Copy to Clipboard
-3. Save to `dashboards/` directory
-4. Update `config/grafana_dashboards.yaml` if needed
+### Expanding Geographic Coverage
+1. **Update API parameters** in `src/data/collection.py`:
+```python
+# Current: North NJ (Morristown area)
+# Expand to: All of NJ or NYC metro
+url = "https://api.rentcast.io/v1/listings/rental/long-term?state=NJ&status=Active&limit=500"
+```
 
-### New Data Sources
-1. Add API integration to `initial_data_pull_test.py`
-2. Update feature engineering in `training_model.py`
-3. Modify monitoring schema in `init_db_fixed.sql`
-4. Update Grafana queries for new metrics
+2. **Update train station mappings** in `src/models/training.py`
+3. **Retrain model** with broader geographic data
+4. **Update email templates** for new areas
 
-## 📞 Support & Maintenance
+### Custom Business Rules
+```python
+# In deployment/lambda/lambda_daily_run.py, modify good deals logic:
+# Current: > $100 under predicted
+good_deals = df[df['price_diff'] > 100]
 
-### Regular Maintenance (Weekly)
-- [ ] Review model performance metrics in Grafana
-- [ ] Check for data drift trends
-- [ ] Validate email notifications are working
-- [ ] Review good deals identified for accuracy
-- [ ] Monitor system resource usage
+# Custom: Add more criteria
+good_deals = df[
+    (df['price_diff'] > 100) &           # Price criteria
+    (df['bedrooms'] >= 2) &             # Size criteria  
+    (df['yearBuilt'] >= 2000) &         # Age criteria
+    (df['station'] != 'not close')      # Transit criteria
+]
+```
 
-### Monthly Tasks
-- [ ] Update dependencies: `pip install -r requirements.txt --upgrade`
-- [ ] Archive old monitoring data
-- [ ] Review and optimize database queries
-- [ ] Security audit of stored credentials
-- [ ] Test backup and recovery procedures
+## 🔮 What's Next?
 
-### Getting Help
-1. **Check Logs**: Start with `docker-compose logs <service>`
-2. **Review Documentation**: Check troubleshooting section above
-3. **Community Support**: 
-   - Prefect: https://docs.prefect.io
-   - Grafana: https://grafana.com/docs/
-   - Evidently: https://docs.evidentlyai.com/
+### Immediate Improvements (Week 1)
+- [ ] **Add your API key** for live data instead of sample data
+- [ ] **Configure email notifications** with your Gmail credentials
+- [ ] **Customize good deal criteria** for your preferences
+- [ ] **Set up mobile alerts** using IFTTT or similar
+
+### Short Term (Month 1)  
+- [ ] **Expand features**: Add commute times, school ratings, crime data
+- [ ] **Improve email formatting**: Rich HTML templates with images
+- [ ] **Add filters**: Property type, size, price range preferences
+- [ ] **Performance tuning**: Optimize for your data volume and preferences
+
+### Long Term (3-6 months)
+- [ ] **Advanced models**: Try deep learning approaches (neural networks)
+- [ ] **Real-time processing**: Stream processing for immediate alerts
+- [ ] **Mobile app**: React Native or Flutter app for on-the-go alerts  
+- [ ] **Multi-market**: Expand to Philadelphia, NYC, or other metros
+- [ ] **Predictive analytics**: Forecast market trends, not just current prices
+
+## 📄 License & Legal
+
+This project is designed for personal and educational use. Please ensure compliance with:
+- **Rentcast API Terms**: Respect rate limits and usage guidelines
+- **Email Service Policies**: Don't spam, follow CAN-SPAM Act
+- **AWS Usage**: Monitor costs and stay within free tier if applicable
+- **Data Privacy**: Don't share personal data from listings
 
 ## 🎉 Success Indicators
 
-You'll know the pipeline is working correctly when:
-- ✅ Grafana dashboard shows data flowing every day
-- ✅ Email notifications arrive with apartment listings
-- ✅ Model performance metrics remain stable
-- ✅ Data drift scores stay within acceptable ranges
-- ✅ Prefect flows complete successfully without manual intervention
+You'll know the pipeline is working when:
+- ✅ **Daily emails arrive** with apartment listings sorted by deal quality
+- ✅ **Grafana dashboard** shows consistent data flow and low drift scores
+- ✅ **Training data grows** by ~1300 rows per day automatically
+- ✅ **Model performance** stays stable (MAE ~$120-180)
+- ✅ **Good deals identified** match your manual market research
 
-## 🎈 Next Steps
+## 🚀 Ready to Find Your Perfect Apartment?
 
-### Immediate (First Week)
-1. **Customize Email Recipients**: Update `email_options.py` with your preferred contacts
-2. **Add Your API Key**: Set `API_KEY` in `.env` for live data
-3. **Configure Alerts**: Set up Grafana notifications for your thresholds
-4. **Test End-to-End**: Run manual flow execution to verify everything works
+Your ML pipeline is now set up to:
+- 🔍 **Automatically scan** 1000+ listings daily
+- 🧠 **Predict fair prices** using advanced ML algorithms
+- 📧 **Alert you instantly** when great deals appear
+- 📈 **Learn continuously** from market data to improve over time
+- 📊 **Monitor performance** with professional dashboards
 
-### Short Term (First Month)
-1. **Expand Coverage**: Add new geographical areas or property types
-2. **Improve Features**: Add commute times, school ratings, crime data
-3. **Business Rules**: Customize "good deal" logic for your market
-4. **Performance Tuning**: Optimize for your specific data volume
-
-### Long Term (3-6 Months)
-1. **Advanced Models**: Experiment with deep learning approaches
-2. **Real-Time Processing**: Implement streaming pipeline for immediate alerts
-3. **Mobile App**: Build mobile interface for deal notifications
-4. **Multi-Market**: Expand to other metro areas
-
----
-
-## 📄 License & Usage
-
-This project is designed for educational and personal use. Please ensure compliance with:
-- Data source terms of service (Rentcast API)
-- Email service provider policies
-- Cloud provider usage limits and costs
-- Local data protection regulations
-
----
-
-## 🚀 Ready to Find Great Apartment Deals?
-
-Your comprehensive apartment ML pipeline is now ready to:
-- 🔍 **Automatically discover** underpriced rentals
-- 📊 **Monitor market trends** with professional dashboards  
-- ⚡ **Scale effortlessly** from local development to cloud production
-- 🎯 **Alert you instantly** when opportunities arise
-- 📈 **Learn continuously** from market changes
-
-**🎯 Quick Start Reminder:**
+**🎯 Quick Reference Commands:**
 ```bash
-./deployment_script.sh
-# Wait 3 minutes...
-# Visit http://localhost:3000
-# Start finding great deals! 🏠✨
+# Start the pipeline
+cd deployment && ./deploy.sh
+
+# Check status  
+docker-compose ps
+
+# View dashboard
+open http://localhost:3000
+
+# Manual run
+docker-compose exec ml-pipeline python /app/deployment/lambda/lambda_daily_run.py
 ```
 
-Happy apartment hunting! 🎉
+Happy apartment hunting in North New Jersey! 🏠✨
+
+---
+
+**💡 Pro Tip**: The longer you run this pipeline, the better it gets. The training data accumulation means your Week 12 predictions will be significantly more accurate than Week 1!
