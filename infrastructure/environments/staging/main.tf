@@ -3,7 +3,7 @@
 
 terraform {
   required_version = ">= 1.6.0"
-  
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -12,13 +12,13 @@ terraform {
   }
 
   # Remote state in S3
-#   backend "s3" {
-#     bucket         = "apartment-pipeline-terraform-state"
-#     key            = "staging/terraform.tfstate"
-#     region         = "us-east-1"
-#     encrypt        = true
-#     dynamodb_table = "terraform-state-lock"
-#   }
+  #   backend "s3" {
+  #     bucket         = "apartment-pipeline-terraform-state"
+  #     key            = "staging/terraform.tfstate"
+  #     region         = "us-east-1"
+  #     encrypt        = true
+  #     dynamodb_table = "terraform-state-lock"
+  #   }
 }
 
 provider "aws" {
@@ -39,11 +39,11 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  account_id    = data.aws_caller_identity.current.account_id
-  region        = data.aws_region.current.name
-  environment   = "staging"
-  project_name  = "apartment-pipeline"
-  
+  account_id   = data.aws_caller_identity.current.account_id
+  region       = data.aws_region.current.name
+  environment  = "staging"
+  project_name = "apartment-pipeline"
+
   # Common tags
   common_tags = {
     Environment = local.environment
@@ -119,7 +119,7 @@ module "mlflow_bucket" {
   project_name      = local.project_name
   purpose           = "MLflow Artifacts"
   enable_versioning = true
-  
+
   lifecycle_rules = [
     {
       id      = "archive-old-models"
@@ -148,13 +148,13 @@ module "training_bucket" {
   project_name      = local.project_name
   purpose           = "Training Data"
   enable_versioning = true
-  
+
   lifecycle_rules = [
     {
-      id               = "expire-old-daily-data"
-      enabled          = true
-      prefix           = "daily/"
-      expiration_days  = 90  # Keep daily predictions for 3 months
+      id              = "expire-old-daily-data"
+      enabled         = true
+      prefix          = "daily/"
+      expiration_days = 90 # Keep daily predictions for 3 months
     }
   ]
 }
@@ -168,12 +168,12 @@ module "predictions_bucket" {
   project_name      = local.project_name
   purpose           = "Daily Predictions"
   enable_versioning = false
-  
+
   lifecycle_rules = [
     {
-      id               = "expire-old-predictions"
-      enabled          = true
-      expiration_days  = 30
+      id              = "expire-old-predictions"
+      enabled         = true
+      expiration_days = 30
     }
   ]
 }
@@ -211,7 +211,7 @@ resource "aws_sns_topic_subscription" "email_alerts" {
 #######################
 resource "aws_sqs_queue" "dlq" {
   name                      = "${local.project_name}-dlq-${local.environment}"
-  message_retention_seconds = 1209600  # 14 days
+  message_retention_seconds = 1209600 # 14 days
 
   tags = local.common_tags
 }
@@ -224,24 +224,24 @@ resource "aws_sqs_queue" "dlq" {
 module "lambda_daily" {
   source = "../../modules/lambda"
 
-  function_name         = "${local.project_name}-daily-predictions-${local.environment}"
-  environment           = local.environment
-  project_name          = local.project_name
-  image_uri             = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
-  handler_command       = ["deployment.lambda.lambda_daily_run.lambda_handler"]
-  memory_size           = 1024
-  timeout               = 300
+  function_name          = "${local.project_name}-daily-predictions-${local.environment}"
+  environment            = local.environment
+  project_name           = local.project_name
+  image_uri              = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+  handler_command        = ["deployment.lambda.lambda_daily_run.lambda_handler"]
+  memory_size            = 1024
+  timeout                = 300
   ephemeral_storage_size = 1024
-  log_retention_days    = 30
-  
-  mlflow_bucket_name    = module.mlflow_bucket.bucket_name
-  mlflow_bucket_arn     = module.mlflow_bucket.bucket_arn
-  training_bucket_name  = module.training_bucket.bucket_name
-  training_bucket_arn   = module.training_bucket.bucket_arn
-  secrets_arn           = aws_secretsmanager_secret.api_keys.arn
-  dlq_arn               = aws_sqs_queue.dlq.arn
-  alarm_sns_arns        = [aws_sns_topic.alerts.arn]
-  
+  log_retention_days     = 30
+
+  mlflow_bucket_name   = module.mlflow_bucket.bucket_name
+  mlflow_bucket_arn    = module.mlflow_bucket.bucket_arn
+  training_bucket_name = module.training_bucket.bucket_name
+  training_bucket_arn  = module.training_bucket.bucket_arn
+  secrets_arn          = aws_secretsmanager_secret.api_keys.arn
+  dlq_arn              = aws_sqs_queue.dlq.arn
+  alarm_sns_arns       = [aws_sns_topic.alerts.arn]
+
   environment_variables = {
     PREDICTIONS_BUCKET = module.predictions_bucket.bucket_name
     SECRET_NAME        = aws_secretsmanager_secret.api_keys.name
@@ -252,23 +252,23 @@ module "lambda_daily" {
 module "lambda_weekly" {
   source = "../../modules/lambda"
 
-  function_name         = "${local.project_name}-weekly-training-${local.environment}"
-  environment           = local.environment
-  project_name          = local.project_name
-  image_uri             = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
-  handler_command       = ["deployment.lambda.lambda_training.lambda_handler"]
-  memory_size           = 2048
-  timeout               = 900  # 15 minutes
+  function_name          = "${local.project_name}-weekly-training-${local.environment}"
+  environment            = local.environment
+  project_name           = local.project_name
+  image_uri              = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+  handler_command        = ["deployment.lambda.lambda_training.lambda_handler"]
+  memory_size            = 2048
+  timeout                = 900 # 15 minutes
   ephemeral_storage_size = 2048
-  log_retention_days    = 30
-  
-  mlflow_bucket_name    = module.mlflow_bucket.bucket_name
-  mlflow_bucket_arn     = module.mlflow_bucket.bucket_arn
-  training_bucket_name  = module.training_bucket.bucket_name
-  training_bucket_arn   = module.training_bucket.bucket_arn
-  secrets_arn           = aws_secretsmanager_secret.api_keys.arn
-  dlq_arn               = aws_sqs_queue.dlq.arn
-  alarm_sns_arns        = [aws_sns_topic.alerts.arn]
+  log_retention_days     = 30
+
+  mlflow_bucket_name   = module.mlflow_bucket.bucket_name
+  mlflow_bucket_arn    = module.mlflow_bucket.bucket_arn
+  training_bucket_name = module.training_bucket.bucket_name
+  training_bucket_arn  = module.training_bucket.bucket_arn
+  secrets_arn          = aws_secretsmanager_secret.api_keys.arn
+  dlq_arn              = aws_sqs_queue.dlq.arn
+  alarm_sns_arns       = [aws_sns_topic.alerts.arn]
 }
 
 #######################
@@ -279,7 +279,7 @@ module "lambda_weekly" {
 resource "aws_cloudwatch_event_rule" "daily_predictions" {
   name                = "${local.project_name}-daily-${local.environment}"
   description         = "Trigger daily apartment predictions"
-  schedule_expression = "cron(0 11 * * ? *)"  # 6 AM EST
+  schedule_expression = "cron(0 11 * * ? *)" # 6 AM EST
 
   tags = local.common_tags
 }
@@ -303,7 +303,7 @@ resource "aws_lambda_permission" "allow_eventbridge_daily" {
 resource "aws_cloudwatch_event_rule" "weekly_training" {
   name                = "${local.project_name}-weekly-${local.environment}"
   description         = "Trigger weekly model training"
-  schedule_expression = "cron(0 6 ? * SUN *)"  # Sunday 1 AM EST
+  schedule_expression = "cron(0 6 ? * SUN *)" # Sunday 1 AM EST
 
   tags = local.common_tags
 }
@@ -348,9 +348,9 @@ resource "aws_cloudwatch_dashboard" "main" {
       {
         type = "log"
         properties = {
-          query   = "SOURCE '/aws/lambda/${module.lambda_daily.function_name}' | fields @timestamp, @message | filter @message like /ERROR/ | sort @timestamp desc | limit 20"
-          region  = local.region
-          title   = "Recent Errors"
+          query  = "SOURCE '/aws/lambda/${module.lambda_daily.function_name}' | fields @timestamp, @message | filter @message like /ERROR/ | sort @timestamp desc | limit 20"
+          region = local.region
+          title  = "Recent Errors"
         }
       }
     ]
