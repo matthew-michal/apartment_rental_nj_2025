@@ -39,3 +39,6 @@ logs/
 
 # AWS
 .aws/
+**/.terraform/
+*.tfstate
+*.tfstate.*
