@@ -48,7 +48,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.login-ecr.outputs.registry }}/apartment-pipeline
+          images: ${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging
           tags: |
             type=sha,prefix=staging-
             type=raw,value=staging-latest
@@ -167,7 +167,7 @@ jobs:
       
       - name: Update Daily Lambda
         run: |
-          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline:staging-${{ github.sha }}"
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:staging-${{ github.sha }}"
           
           echo "Updating Lambda: ${{ needs.deploy-infrastructure.outputs.lambda_daily }}"
           echo "With image: $IMAGE_URI"
@@ -184,7 +184,7 @@ jobs:
       
       - name: Update Weekly Lambda
         run: |
-          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline:staging-${{ github.sha }}"
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:staging-${{ github.sha }}"
           
           echo "Updating Lambda: ${{ needs.deploy-infrastructure.outputs.lambda_weekly }}"
           echo "With image: $IMAGE_URI"
