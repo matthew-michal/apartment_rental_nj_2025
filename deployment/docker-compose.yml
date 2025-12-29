@@ -105,27 +105,27 @@ services:
       retries: 5
       start_period: 60s
 
-  # ML Pipeline Container
-  ml-pipeline:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    volumes:
-     - ../:/app  # Mount entire project
-     - ../data:/app/data
-    environment:
-      - PREFECT_API_URL=http://prefect-server:4200/api
-      - AWS_PROFILE=default
-      - AWS_REGION=us-east-1
-      - PYTHONPATH=/app
-    networks:
-      - prefect-tier
-      - back-tier
-    depends_on:
-      prefect-server:
-        condition: service_healthy
-    command: tail -f /dev/null  # Keep container running
+  # # ML Pipeline Container
+  # ml-pipeline:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   restart: unless-stopped
+  #   volumes:
+  #    - ../:/app  # Mount entire project
+  #    - ../data:/app/data
+  #   environment:
+  #     - PREFECT_API_URL=http://prefect-server:4200/api
+  #     - AWS_PROFILE=default
+  #     - AWS_REGION=us-east-1
+  #     - PYTHONPATH=/app
+  #   networks:
+  #     - prefect-tier
+  #     - back-tier
+  #   depends_on:
+  #     prefect-server:
+  #       condition: service_healthy
+  #   command: tail -f /dev/null  # Keep container running
 
   # Prefect Agent
   prefect-agent:
@@ -146,20 +146,20 @@ services:
         condition: service_healthy
     command: prefect agent start --work-queue ml-pipeline
 
-  # Optional: Prometheus for additional metrics collection
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    networks:
-      - back-tier
-    restart: always
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
+  # # Optional: Prometheus for additional metrics collection
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #   networks:
+  #     - back-tier
+  #   restart: always
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #     - '--web.console.libraries=/etc/prometheus/console_libraries'
+  #     - '--web.console.templates=/etc/prometheus/consoles'
+  #     - '--storage.tsdb.retention.time=200h'
+  #     - '--web.enable-lifecycle'

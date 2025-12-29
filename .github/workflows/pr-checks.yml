@@ -1,0 +1,174 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - 'deployment/**'
+      - '.github/workflows/**'
+
+env:
+  PYTHON_VERSION: '3.9'
+
+jobs:
+  # Job 1: Code Quality and Testing
+  quality-checks:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov black ruff mypy bandit safety
+      
+      - name: Code formatting check (Black)
+        run: |
+          black --check src/ tests/
+          if [ $? -ne 0 ]; then
+            echo "❌ Code formatting issues found. Run 'black src/ tests/' to fix."
+            exit 1
+          fi
+      
+      - name: Linting (Ruff)
+        run: |
+          ruff check src/ tests/
+      
+      - name: Type checking (MyPy)
+        run: |
+          mypy src/ --ignore-missing-imports --no-strict-optional
+        continue-on-error: true  # Don't fail build, just warn
+      
+      - name: Security scan (Bandit)
+        run: |
+          bandit -r src/ -f json -o bandit-report.json
+        continue-on-error: true
+      
+      - name: Dependency vulnerability check
+        run: |
+          safety check --json
+        continue-on-error: true
+      
+      - name: Run unit tests
+        run: |
+          pytest tests/ \
+            --cov=src \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-report=term-missing \
+            --junitxml=pytest-report.xml \
+            -v
+      
+      - name: Check test coverage
+        run: |
+          coverage report --fail-under=70
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: |
+            pytest-report.xml
+            coverage.xml
+            htmlcov/
+            bandit-report.json
+  
+  # Job 2: Validate Terraform
+  terraform-validation:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+      
+      - name: Terraform Format Check
+        run: |
+          cd infrastructure
+          terraform fmt -check -recursive
+      
+      - name: Terraform Init (Dev)
+        run: |
+          cd infrastructure/environments/dev
+          terraform init -backend=false
+      
+      - name: Terraform Validate (Dev)
+        run: |
+          cd infrastructure/environments/dev
+          terraform validate
+  
+  # Job 3: Docker Build Test
+  docker-build-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker image (test only)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deployment/Dockerfile
+          push: false
+          tags: apartment-pipeline:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Run Docker container smoke test
+        run: |
+          docker run --rm apartment-pipeline:test python -c "import sys; print(f'Python {sys.version}'); print('✅ Container works!')"
+  
+  # Job 4: Summary
+  pr-summary:
+    needs: [quality-checks, terraform-validation, docker-build-test]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: PR Check Summary
+        run: |
+          echo "## Pull Request Checks Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Code Quality**: ${{ needs.quality-checks.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Terraform Validation**: ${{ needs.terraform-validation.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Docker Build**: ${{ needs.docker-build-test.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.quality-checks.result }}" == "failure" ] || \
+             [ "${{ needs.terraform-validation.result }}" == "failure" ] || \
+             [ "${{ needs.docker-build-test.result }}" == "failure" ]; then
+            echo "❌ **Some checks failed. Please review and fix.**" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "✅ **All checks passed! Ready to merge.**" >> $GITHUB_STEP_SUMMARY
+          fi

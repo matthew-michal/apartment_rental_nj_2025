@@ -1,75 +1,52 @@
-# lambda_daily_run.py - Updated with Evidently monitoring for apartment rental pipeline
-import json
-import os
-import boto3
-import sys
-from datetime import datetime, timedelta
-import pandas as pd
-import numpy as np
-import mlflow
-import psycopg
-import logging
-from io import StringIO
+"""
+Daily apartment predictions Lambda handler.
 
-from training_model import find_station
-from initial_data_pull_test import data_pull
-from email_options import send_predictions_email
-from monitoring_config import MLPipelineMonitor
-from src.data.accumulator import TrainingDataAccumulator
-
-from evidently import ColumnMapping
-from evidently.report import Report
-from evidently.metrics import (
-    ColumnDriftMetric, 
-    DatasetDriftMetric, 
-    DatasetMissingValuesMetric,
-    ColumnSummaryMetric,
-    RegressionQualityMetric
-)
-
-# sys.path.append('/app')  # For Docker/Lambda
-sys.path.append('../../')  # For local development
-
-# Initialize AWS clients
-s3_client = boto3.client('s3')
-ssm_client = boto3.client('ssm')
-
-# Configuration using your specific buckets
-MLFLOW_BUCKET = 'mlflow-artifact-mmichal'
-TRAINING_BUCKET = 'training-data-bucket-mmichal-apartments-nj'
-MLFLOW_TRACKING_URI = os.environ.get('MLFLOW_TRACKING_URI')
-
-# Initialize monitor
-monitor = MLPipelineMonitor()
-
-# # Features for apartment rental model
-NUMERICAL_FEATURES = ['latitude', 'longitude', 'bedrooms', 'bathrooms', 'yearBuilt', 'lotSize']
-CATEGORICAL_FEATURES = ['station', 'propertyType']
-# ALL_FEATURES = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
-# Match the exact order the model was trained with
-ALL_FEATURES = ['latitude', 'longitude', 'station', 'propertyType', 'bedrooms', 'bathrooms', 'yearBuilt', 'lotSize']
-TARGET_COLUMN = 'price'
-PREDICTION_COLUMN = 'price_preds'
-
-# Database setup for metrics
-CREATE_METRICS_TABLE = """
-CREATE TABLE IF NOT EXISTS apartment_metrics (
-    timestamp TIMESTAMP,
-    prediction_drift FLOAT,
-    num_drifted_columns INTEGER,
-    share_missing_values FLOAT,
-    target_drift FLOAT,
-    prediction_mae FLOAT,
-    prediction_rmse FLOAT,
-    data_points INTEGER,
-    avg_predicted_price FLOAT,
-    avg_actual_price FLOAT,
-    price_diff_std FLOAT,
-    good_deals_count INTEGER
-);
+This function runs daily to:
+1. Fetch new apartment listings from Rentcast API
+2. Load the latest trained model from MLflow
+3. Make price predictions
+4. Identify good deals (apartments priced below prediction)
+5. Send email alerts for best deals
+6. Accumulate data for training
+7. Monitor and log metrics
 """
 
-# Add to lambda_daily_run.py
+import json
+import os
+import sys
+import logging
+from datetime import datetime
+from typing import Dict, Any, List
+
+import pandas as pd
+import numpy as np
+import boto3
+import mlflow
+
+# Add paths for imports
+sys.path.append('/app')
+
+# Import our modules
+from src.config.environment import get_config, get_secret
+from src.data.collection import ApartmentDataCollector
+from src.data.accumulator import TrainingDataAccumulator
+from src.models.training import create_X
+from src.monitoring.config import MLPipelineMonitor
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Initialize services
+config = get_config()
+monitor = MLPipelineMonitor()
+s3_client = boto3.client('s3', region_name=config.aws_region)
+ses_client = boto3.client('ses', region_name=config.aws_region)
+
+
 def make_json_safe(obj):
     """Convert numpy types to JSON-serializable Python types"""
     if isinstance(obj, dict):
@@ -85,443 +62,375 @@ def make_json_safe(obj):
     else:
         return obj
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]: %(message)s")
 
-def get_secret_parameter(parameter_name):
-    """Get parameter from AWS Systems Manager Parameter Store"""
+def load_model():
+    """Load the latest trained model from MLflow"""
     try:
-        response = ssm_client.get_parameter(
-            Name=parameter_name,
-            WithDecryption=True
-        )
-        return response['Parameter']['Value']
+        logger.info("Loading model from MLflow...")
+        
+        # Set MLflow tracking URI
+        mlflow.set_tracking_uri(config.mlflow_tracking_uri)
+        
+        # Get the latest run ID from S3
+        try:
+            run_id_obj = s3_client.get_object(
+                Bucket=config.mlflow_bucket,
+                Key='models/run_id.txt'
+            )
+            run_id = run_id_obj['Body'].read().decode('utf-8').strip()
+            logger.info(f"Using model from run_id: {run_id}")
+        except Exception as e:
+            logger.warning(f"Could not load run_id from S3: {e}")
+            # Try to use the production model alias
+            run_id = None
+        
+        # Load model
+        if run_id:
+            model_uri = f"runs:/{run_id}/pipeline_model"
+            model = mlflow.sklearn.load_model(model_uri)
+            logger.info(f"✅ Model loaded successfully from run {run_id}")
+        else:
+            # Fallback: load latest version of registered model
+            model_uri = "models:/apartment-rent-pipeline/Production"
+            model = mlflow.sklearn.load_model(model_uri)
+            logger.info("✅ Model loaded from production registry")
+        
+        return model, run_id
+        
     except Exception as e:
-        print(f"Error getting parameter {parameter_name}: {e}")
-        return None
+        logger.error(f"Failed to load model: {e}")
+        raise
 
-def get_db_connection():
-    """Get PostgreSQL connection for metrics storage"""
+
+def make_predictions(df: pd.DataFrame, model) -> pd.DataFrame:
+    """
+    Make price predictions for apartments.
+    
+    Args:
+        df: DataFrame with apartment features
+        model: Trained model pipeline
+    
+    Returns:
+        DataFrame with predictions added
+    """
     try:
-        # Get DB credentials from Parameter Store
-        db_host = get_secret_parameter('/ml-pipeline/db-host') or 'localhost'
-        db_port = get_secret_parameter('/ml-pipeline/db-port') or '5432'
-        db_name = get_secret_parameter('/ml-pipeline/db-name') or 'apartment_monitoring'
-        db_user = get_secret_parameter('/ml-pipeline/db-user') or 'postgres'
-        db_password = get_secret_parameter('/ml-pipeline/db-password') or 'example'
+        logger.info(f"Making predictions for {len(df)} apartments...")
         
-        conn_string = f"host={db_host} port={db_port} dbname={db_name} user={db_user} password={db_password}"
-        return psycopg.connect(conn_string, autocommit=True)
-    except Exception as e:
-        print(f"Error connecting to database: {e}")
-        return None
-
-def setup_database():
-    """Setup database and tables for metrics"""
-    try:
-        conn = get_db_connection()
-        if conn:
-            with conn.cursor() as curr:
-                curr.execute(CREATE_METRICS_TABLE)
-            conn.close()
-            print("Database setup completed")
-    except Exception as e:
-        print(f"Error setting up database: {e}")
-
-def load_data_with_fallback():
-    """Load data with multiple fallback options"""
-    try:
-        # Try to get API key from Parameter Store
-        api_key = get_secret_parameter('/ml-pipeline/api-key')
-        if api_key:
-            os.environ['API_KEY'] = api_key
+        # Prepare features (same as training)
+        df_copy = df.copy()
+        X = create_X(df_copy)
         
-        # Pull fresh data with debugging
-        df = data_pull()
-        print(f"API response type: {type(df)}")
-        print(f"API response (first 200 chars): {str(df)[:200]}")
-
-        if isinstance(df, str):
-            print(f"Full API response: {df}")
-            raise Exception(f"API returned string instead of DataFrame: {df}")
-            
-        if df is None:
-            raise Exception("API returned None")
-            
-        print(f"Fresh data pulled successfully: {df.shape}")
+        # Make predictions
+        predictions = model.predict(X)
         
-        # Validate the data_pull result
-        if isinstance(df, str):
-            print(f"API returned string instead of DataFrame: {df[:100]}...")
-            raise Exception("API returned invalid format")
+        # Add predictions to dataframe
+        df['price_preds'] = predictions
+        df['price_diff'] = df['price'] - df['price_preds']
         
-        if df is None or len(df) == 0:
-            raise Exception("No data returned from API")
-            
-        print(f"Fresh data pulled: {df.shape}")
-        
-        # Save fresh data to S3 for backup
-        current_date = datetime.now().strftime('%Y%m%d_%H%M')
-        csv_file = f'data_pull_{current_date}.csv'
-        df.to_csv(csv_file, index=False)
-        s3_client.upload_file(csv_file, TRAINING_BUCKET, f'daily-data/{csv_file}')
+        logger.info("✅ Predictions completed")
+        logger.info(f"   - Average predicted price: ${df['price_preds'].mean():.2f}")
+        logger.info(f"   - Average actual price: ${df['price'].mean():.2f}")
+        logger.info(f"   - Average difference: ${df['price_diff'].mean():.2f}")
         
         return df
         
     except Exception as e:
-        print(f"Error pulling fresh data: {e}")
-        
-        # Try to load cached data from S3
-        try:
-            # Look for the most recent data file
-            response = s3_client.list_objects_v2(
-                Bucket=TRAINING_BUCKET,
-                Prefix='daily-data/',
-                MaxKeys=10
-            )
-            
-            if 'Contents' in response:
-                latest_file = sorted(response['Contents'], key=lambda x: x['LastModified'])[-1]
-                cached_file = 'cached_data.csv'
-                s3_client.download_file(TRAINING_BUCKET, latest_file['Key'], cached_file)
-                df = pd.read_csv(cached_file)
-                print(f"Using cached data: {df.shape}")
-                return df
-            else:
-                raise ValueError("No cached data available")
-                
-        except Exception as cache_error:
-            print(f"Error loading cached data: {cache_error}")
-            
-            # Final fallback: create mock current data for testing
-            print("Creating mock data for testing...")
-            mock_data = pd.DataFrame({
-                'id': range(1, 21),
-                'latitude': [40.7128 + i*0.01 for i in range(20)],
-                'longitude': [-74.0060 - i*0.005 for i in range(20)],
-                'propertyType': ['Apartment'] * 20,
-                'bedrooms': [2, 3, 1, 2, 3] * 4,
-                'bathrooms': [1, 2, 1, 1, 2] * 4,
-                'yearBuilt': [2010 + i for i in range(20)],
-                'lotSize': [1000 + i*50 for i in range(20)],
-                'price': [2500 + i*100 for i in range(20)]
-            })
-            
-            print(f"Mock data created: {mock_data.shape}")
-            return mock_data
-
-def load_reference_data():
-    """Load reference data for drift detection"""
-    try:
-        # Fix: Use current directory instead of /tmp to avoid Windows path issues
-        reference_file = 'reference_data.csv'
-        s3_client.download_file(TRAINING_BUCKET, 'reference-data/reference_data.csv', reference_file)
-        reference_data = pd.read_csv(reference_file)
-        print(f"Reference data loaded: {reference_data.shape}")
-        return reference_data
-    except Exception as e:
-        print(f"Error loading reference data: {e}")
-        # If no reference data exists, create it from training data
-        try:
-            # Load training data as reference
-            training_file = 'training_ref.csv'
-            s3_client.download_file(TRAINING_BUCKET, 'training_load.csv', training_file)
-            reference_data = pd.read_csv(training_file).sample(n=min(1000, len(pd.read_csv(training_file))))
-            
-            # Add station information
-            reference_data['lat_long'] = reference_data.latitude.astype(str) + '_' + reference_data.longitude.astype(str)
-            reference_data['station'] = reference_data.lat_long.apply(find_station)
-            
-            # Save as reference data to S3
-            reference_data.to_csv('reference_data.csv', index=False)
-            s3_client.upload_file('reference_data.csv', TRAINING_BUCKET, 'reference-data/reference_data.csv')
-            
-            print(f"Created reference data from training set: {reference_data.shape}")
-            return reference_data
-        except Exception as ref_error:
-            print(f"Error creating reference data: {ref_error}")
-            return None
-
-def calculate_evidently_metrics(current_data, reference_data, timestamp):
-    """Calculate Evidently metrics and store in database"""
-    try:
-        # Ensure both datasets have the same columns
-        common_columns = list(set(current_data.columns) & set(reference_data.columns))
-        current_subset = current_data[common_columns].copy()
-        reference_subset = reference_data[common_columns].copy()
-        
-        # Handle missing values
-        current_subset = current_subset.fillna(0)
-        reference_subset = reference_subset.fillna(0)
-
-        for col in current_subset.columns:
-            if current_subset[col].dtype == 'object':
-                # Convert any dict/complex objects to strings
-                current_subset[col] = current_subset[col].astype(str)
-                reference_subset[col] = reference_subset[col].astype(str)
-        
-        # Column mapping for Evidently
-        column_mapping = ColumnMapping(
-            target=TARGET_COLUMN,
-            prediction=PREDICTION_COLUMN,
-            numerical_features=[col for col in NUMERICAL_FEATURES if col in common_columns],
-            categorical_features=[col for col in CATEGORICAL_FEATURES if col in common_columns]
-        )
-        
-        # Create Evidently report
-        report = Report(metrics=[
-            ColumnDriftMetric(column_name=PREDICTION_COLUMN),
-            ColumnDriftMetric(column_name=TARGET_COLUMN),
-            DatasetDriftMetric(),
-            DatasetMissingValuesMetric(),
-            RegressionQualityMetric() if TARGET_COLUMN in current_subset.columns else ColumnSummaryMetric(column_name=PREDICTION_COLUMN)
-        ])
-        
-        # Run the report
-        report.run(
-            reference_data=reference_subset,
-            current_data=current_subset,
-            column_mapping=column_mapping
-        )
-        
-        result = report.as_dict()
-        
-        # Extract metrics
-        prediction_drift = result['metrics'][0]['result']['drift_score']
-        target_drift = result['metrics'][1]['result']['drift_score'] if len(result['metrics']) > 1 else 0
-        num_drifted_columns = result['metrics'][2]['result']['number_of_drifted_columns']
-        share_missing_values = result['metrics'][3]['result']['current']['share_of_missing_values']
-        
-        # Regression quality metrics if available
-        prediction_mae = 0
-        prediction_rmse = 0
-        if len(result['metrics']) > 4 and 'mean_abs_error' in result['metrics'][4]['result']['current']:
-            prediction_mae = result['metrics'][4]['result']['current']['mean_abs_error']
-            prediction_rmse = result['metrics'][4]['result']['current']['rmse']
-        
-        # Additional business metrics
-        avg_predicted_price = float(current_data[PREDICTION_COLUMN].mean())
-        avg_actual_price = float(current_data[TARGET_COLUMN].mean()) if TARGET_COLUMN in current_data.columns else 0
-        price_diff_std = float(current_data['price_diff'].std()) if 'price_diff' in current_data.columns else 0
-        good_deals_count = int((current_data['price_diff'] > 100).sum()) if 'price_diff' in current_data.columns else 0
-        
-        # Store metrics in database
-        conn = get_db_connection()
-        if conn:
-            try:
-                with conn.cursor() as curr:
-                    curr.execute(
-                        """INSERT INTO apartment_metrics 
-                           (timestamp, prediction_drift, num_drifted_columns, share_missing_values, 
-                            target_drift, prediction_mae, prediction_rmse, data_points, 
-                            avg_predicted_price, avg_actual_price, price_diff_std, good_deals_count) 
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                        (timestamp, prediction_drift, num_drifted_columns, share_missing_values,
-                         target_drift, prediction_mae, prediction_rmse, len(current_data),
-                         avg_predicted_price, avg_actual_price, price_diff_std, good_deals_count)
-                    )
-                conn.close()
-                print(f"Metrics stored for timestamp: {timestamp}")
-            except Exception as db_error:
-                print(f"Error storing metrics in database: {db_error}")
-                conn.close()
-        
-        # Save report to S3
-        report_json = json.dumps(result, indent=2, default=str)
-        report_file = f'evidently_report_{timestamp.strftime("%Y%m%d_%H%M")}.json'  # Current directory
-        with open(report_file, 'w') as f:
-            f.write(report_json)
-        
-        s3_client.upload_file(
-            report_file, 
-            MLFLOW_BUCKET, 
-            f'monitoring/evidently_reports/report_{timestamp.strftime("%Y%m%d_%H%M")}.json'
-        )
-        
-        return {
-            'prediction_drift': prediction_drift,
-            'target_drift': target_drift,
-            'num_drifted_columns': num_drifted_columns,
-            'share_missing_values': share_missing_values,
-            'prediction_mae': prediction_mae,
-            'prediction_rmse': prediction_rmse
-        }
-        
-    except Exception as e:
-        print(f"Error calculating Evidently metrics: {e}")
-        return None
-
-def load_pipeline():
-    """Load ML pipeline from MLflow using your bucket"""
-    try:
-        # Try to get run_id from your MLflow bucket
-        run_id = None
-        try:
-            response = s3_client.get_object(Bucket=MLFLOW_BUCKET, Key='models/run_id.txt')
-            run_id = response['Body'].read().decode('utf-8').strip()
-            print(f"Loaded run_id from S3: {run_id}")
-        except Exception as e:
-            print(f"Could not load run_id from S3: {e}")
-        
-        if run_id:
-            model_uri = f"runs:/{run_id}/pipeline_model"
-        else:
-            # Fallback to latest model from registry
-            model_uri = "models:/apartment-rent-pipeline/latest"
-        
-        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-        loaded_pipeline = mlflow.sklearn.load_model(model_uri)
-        print(f"Successfully loaded pipeline from: {model_uri}")
-        return loaded_pipeline
-        
-    except Exception as e:
-        print(f"Error loading pipeline: {e}")
+        logger.error(f"Error making predictions: {e}")
         raise
 
-def load_data():
-    """Load and prepare data with fixed file paths"""
+
+def identify_good_deals(
+    df: pd.DataFrame,
+    min_savings: float = 100.0,
+    max_deals: int = 20
+) -> pd.DataFrame:
+    """
+    Identify apartments that are good deals.
+    
+    Args:
+        df: DataFrame with predictions
+        min_savings: Minimum savings to be considered a good deal
+        max_deals: Maximum number of deals to return
+    
+    Returns:
+        DataFrame with good deals, sorted by savings
+    """
+    # Find apartments priced below prediction
+    good_deals = df[df['price_diff'] > min_savings].copy()
+    
+    # Sort by price difference (best deals first)
+    good_deals = good_deals.sort_values('price_diff', ascending=False)
+    
+    # Limit to top deals
+    good_deals = good_deals.head(max_deals)
+    
+    logger.info(f"✅ Identified {len(good_deals)} good deals (>${min_savings} savings)")
+    
+    return good_deals
+
+
+def format_deal_for_email(deal: pd.Series) -> str:
+    """Format a single deal for email"""
+    return f"""
+🏠 {deal.get('propertyType', 'Property')} - ${deal.get('price', 0):,.0f}/month
+   💰 Predicted Fair Price: ${deal['price_preds']:,.0f}
+   ✅ Your Savings: ${deal['price_diff']:,.0f}/month
+   
+   📍 Location: {deal.get('city', 'N/A')}, NJ
+   🛏️  {deal.get('bedrooms', 'N/A')} bed, {deal.get('bathrooms', 'N/A')} bath
+   📅 Built: {deal.get('yearBuilt', 'N/A')}
+   📏 Lot Size: {deal.get('lotSize', 'N/A'):,.0f} sq ft
+   
+   🔗 Link: {deal.get('url', 'No URL available')}
+    """.strip()
+
+
+def send_email_alert(good_deals: pd.DataFrame, total_listings: int):
+    """
+    Send email alert with good deals.
+    
+    Args:
+        good_deals: DataFrame with good deals
+        total_listings: Total number of listings processed
+    """
     try:
-        # Get API key from Parameter Store
-        api_key = get_secret_parameter('/ml-pipeline/api-key')
-        
-        # Pass API key directly to data_pull function
-        df = data_pull(api_key=api_key)
-        print(f"Fresh data pulled: {df.shape}")
-        
-        # Save fresh data to S3 for backup with fixed path
-        current_date = datetime.now().strftime('%d%B%Y')
-        csv_file = f'data_pull_{current_date}.csv'
-        df.to_csv(csv_file, index=False)
-        s3_client.upload_file(csv_file, TRAINING_BUCKET, f'daily-data/data_pull_{current_date}.csv')
-        
-    except Exception as e:
-        print(f"Error pulling fresh data: {e}")
-        # Try to load cached data from S3
+        # Get email addresses from secrets
         try:
-            response = s3_client.list_objects_v2(
-                Bucket=TRAINING_BUCKET,
-                Prefix='daily-data/',
-                MaxKeys=10
-            )
+            sender_email = get_secret('SENDER_EMAIL')
+            recipient_email = get_secret('RECIPIENT_EMAIL')
+        except Exception as e:
+            logger.warning(f"Could not get email addresses from secrets: {e}")
+            # Fallback to environment variables
+            sender_email = os.environ.get('SENDER_EMAIL')
+            recipient_email = os.environ.get('RECIPIENT_EMAIL')
+        
+        if not sender_email or not recipient_email:
+            logger.warning("Email addresses not configured, skipping email alert")
+            return
+        
+        # Prepare email content
+        if len(good_deals) == 0:
+            subject = f"🏠 No Great Deals Today ({total_listings} listings checked)"
+            body = f"""
+Hello!
+
+Today's apartment scan didn't find any exceptional deals.
+
+📊 Summary:
+- Total listings checked: {total_listings}
+- Good deals found: 0
+- Minimum savings threshold: $100/month
+
+The model will keep monitoring and alert you when better opportunities appear.
+
+Happy house hunting!
+            """.strip()
+        else:
+            subject = f"🎉 {len(good_deals)} Great Apartment Deals Found!"
             
-            if 'Contents' in response:
-                latest_file = sorted(response['Contents'], key=lambda x: x['LastModified'])[-1]
-                cached_file = 'cached_data.csv'
-                s3_client.download_file(TRAINING_BUCKET, latest_file['Key'], cached_file)
-                df = pd.read_csv(cached_file)
-                print(f"Using cached data: {df.shape}")
-            else:
-                raise ValueError("No cached data available")
-        except Exception as cache_error:
-            print(f"Error loading cached data: {cache_error}")
-            raise ValueError("No data available - both fresh pull and cached data failed")
-    
-    # CRITICAL: Prepare the features that your model expects
-    df['lat_long'] = df.latitude.astype(str) + '_' + df.longitude.astype(str)
-    df['station'] = df.lat_long.apply(find_station)
-    
-    print(f"Features prepared. Data shape: {df.shape}")
-    print(f"Columns: {list(df.columns)}")
-    
-    return df
+            deals_text = "\n\n" + "="*60 + "\n\n".join([
+                format_deal_for_email(deal)
+                for _, deal in good_deals.iterrows()
+            ])
+            
+            total_savings = good_deals['price_diff'].sum()
+            avg_savings = good_deals['price_diff'].mean()
+            
+            body = f"""
+Hello!
 
-def predict_and_monitor(df, pipeline, reference_data):
-    """Make predictions, calculate metrics, and send email"""
-    # Make predictions
-    predictions = pipeline.predict(df[ALL_FEATURES])
-    df[PREDICTION_COLUMN] = predictions
-    df['price_diff'] = df[TARGET_COLUMN] - df[PREDICTION_COLUMN]
-    
-    current_timestamp = datetime.now()
-    
-    # Calculate Evidently metrics
-    evidently_metrics = calculate_evidently_metrics(df, reference_data, current_timestamp)
-    
-    # Log data quality metrics using existing monitor
-    monitor.log_data_quality_metrics(df, 'predictions')
-    
-    # Save results to S3
-    current_date = current_timestamp.strftime('%Y%m%d_%H%M')
-    results_file = f'predictions_{current_date}.csv'  # Current directory
-    df.to_csv(results_file, index=False)
-    s3_client.upload_file(results_file, MLFLOW_BUCKET, f'predictions/predictions_{current_date}.csv')
+Found {len(good_deals)} great apartment deals today! 🎉
 
-    try:
-        accumulator = TrainingDataAccumulator()
-        accumulation_stats = accumulator.add_daily_predictions(df)
-        print(f"✅ Training data accumulated: {accumulation_stats}")
+📊 Summary:
+- Total listings checked: {total_listings}
+- Good deals found: {len(good_deals)}
+- Average savings: ${avg_savings:,.0f}/month
+- Total potential savings: ${total_savings:,.0f}/month
+
+{deals_text}
+
+💡 These apartments are priced significantly below their predicted fair market value based on location, size, and features.
+
+Happy house hunting!
+            """.strip()
+        
+        # Send email via SES
+        response = ses_client.send_email(
+            Source=sender_email,
+            Destination={'ToAddresses': [recipient_email]},
+            Message={
+                'Subject': {'Data': subject},
+                'Body': {'Text': {'Data': body}}
+            }
+        )
+        
+        logger.info(f"✅ Email sent successfully (MessageId: {response['MessageId']})")
+        
     except Exception as e:
-        print(f"⚠️ Training accumulation failed: {e}")
+        logger.error(f"Failed to send email alert: {e}")
+        # Don't raise - email failure shouldn't fail the whole function
 
-    # Send email
+
+def save_results_to_s3(df: pd.DataFrame, good_deals: pd.DataFrame) -> Dict[str, str]:
+    """
+    Save results to S3 for record keeping.
+    
+    Returns:
+        Dictionary with S3 keys where data was saved
+    """
     try:
-        email_password = get_secret_parameter('/ml-pipeline/email-password')
-        if email_password:
-            send_predictions_email(
-                df=df.sort_values('price_diff'),
-                recipient_emails="Enter email",
-                sender_email="Enter email",
-                sender_password=email_password
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        date_prefix = datetime.now().strftime('%Y/%m/%d')
+        
+        # Save all predictions
+        predictions_key = f"daily/{date_prefix}/predictions_{timestamp}.csv"
+        csv_buffer = df.to_csv(index=False)
+        
+        s3_client.put_object(
+            Bucket=config.predictions_bucket or config.training_bucket,
+            Key=predictions_key,
+            Body=csv_buffer,
+            ContentType='text/csv'
+        )
+        
+        # Save good deals separately
+        deals_key = None
+        if len(good_deals) > 0:
+            deals_key = f"daily/{date_prefix}/good_deals_{timestamp}.csv"
+            deals_csv = good_deals.to_csv(index=False)
+            
+            s3_client.put_object(
+                Bucket=config.predictions_bucket or config.training_bucket,
+                Key=deals_key,
+                Body=deals_csv,
+                ContentType='text/csv'
             )
-            print("Email sent successfully")
-    except Exception as e:
-        print(f"Error sending email: {e}")
-        # Don't fail the entire pipeline if email fails
-    
-    return df, evidently_metrics
-
-def lambda_handler(event, context):
-    """Main Lambda handler for daily predictions with monitoring"""
-    try:
-        print(f"Starting daily prediction run with monitoring at {datetime.now()}")
-        monitor.log_pipeline_start('daily_predictions', event)
         
-        # Setup database for metrics
-        setup_database()
+        logger.info(f"✅ Results saved to S3:")
+        logger.info(f"   - Predictions: {predictions_key}")
+        if deals_key:
+            logger.info(f"   - Good deals: {deals_key}")
         
-        # Load pipeline, reference data, and current data
-        pipeline = load_pipeline()
-        reference_data = load_reference_data()
-        current_data = load_data()
-        
-        # Make predictions and calculate monitoring metrics
-        results_df, evidently_metrics = predict_and_monitor(current_data, pipeline, reference_data)
-        
-        # Log summary results
-        results = {
-            'total_predictions': len(results_df),
-            'avg_predicted_price': float(results_df[PREDICTION_COLUMN].mean()),
-            'avg_actual_price': float(results_df[TARGET_COLUMN].mean()) if TARGET_COLUMN in results_df.columns else None,
-            'price_diff_std': float(results_df['price_diff'].std()),
-            'best_deals_count': int((results_df['price_diff'] > 100).sum()),
-            'monitoring_metrics': evidently_metrics
+        return {
+            'predictions_key': predictions_key,
+            'deals_key': deals_key
         }
         
-        print(f"Predictions completed for {len(results_df)} properties")
-        print(f"Average predicted price: ${results['avg_predicted_price']:.2f}")
-        print(f"Properties with good deals (>$100 under predicted): {results['best_deals_count']}")
+    except Exception as e:
+        logger.error(f"Error saving results to S3: {e}")
+        return {}
+
+
+def lambda_handler(event, context):
+    """
+    Main Lambda handler for daily predictions.
+    
+    Event parameters:
+        - dry_run (bool): If True, skip data collection and email
+        - limit (int): Limit number of listings to process (for testing)
+        - min_savings (float): Minimum savings for good deals
+    """
+    try:
+        logger.info(f"Starting daily predictions at {datetime.now()}")
+        logger.info(f"Environment: {config.environment}")
+        logger.info(f"Event: {json.dumps(event)}")
         
-        if evidently_metrics:
-            print(f"Data drift detected in {evidently_metrics['num_drifted_columns']} columns")
-            print(f"Prediction drift score: {evidently_metrics['prediction_drift']:.4f}")
+        monitor.log_pipeline_start('daily_predictions', event)
         
-        # Log top deals
-        top_deals = results_df.nlargest(10, 'price_diff')[['id', TARGET_COLUMN, PREDICTION_COLUMN, 'price_diff', 'station']]
-        print("Top 10 deals:")
-        print(top_deals.to_string())
+        # Parse event parameters
+        dry_run = event.get('dry_run', False)
+        limit = event.get('limit', None)
+        min_savings = event.get('min_savings', 100.0)
+        
+        if dry_run:
+            logger.info("🧪 DRY RUN MODE - Using sample data, no emails")
+        
+        # Step 1: Collect apartment listings
+        if not dry_run:
+            logger.info("Step 1: Collecting apartment listings...")
+            collector = ApartmentDataCollector()
+            df = collector.collect_listings(max_pages=15)
+            
+            if limit:
+                df = df.head(limit)
+                logger.info(f"Limited to {limit} listings for testing")
+        else:
+            # For dry run, create sample data
+            logger.info("Creating sample data for dry run...")
+            df = pd.DataFrame({
+                'id': range(10),
+                'price': [2000, 2200, 1800, 2500, 1900, 2100, 2300, 1850, 2050, 2150],
+                'latitude': [40.8] * 10,
+                'longitude': [-74.4] * 10,
+                'propertyType': ['Apartment'] * 10,
+                'bedrooms': [2] * 10,
+                'bathrooms': [2] * 10,
+                'yearBuilt': [2015] * 10,
+                'lotSize': [1200] * 10,
+            })
+        
+        # Log data quality
+        monitor.log_data_quality_metrics(df, 'daily_listings')
+        
+        # Step 2: Load model
+        logger.info("Step 2: Loading trained model...")
+        model, run_id = load_model()
+        
+        # Step 3: Make predictions
+        logger.info("Step 3: Making predictions...")
+        df = make_predictions(df, model)
+        
+        # Step 4: Identify good deals
+        logger.info("Step 4: Identifying good deals...")
+        good_deals = identify_good_deals(df, min_savings=min_savings)
+        
+        # Step 5: Save results to S3
+        logger.info("Step 5: Saving results to S3...")
+        s3_keys = save_results_to_s3(df, good_deals)
+        
+        # Step 6: Accumulate data for training
+        logger.info("Step 6: Accumulating data for training...")
+        accumulator = TrainingDataAccumulator()
+        accumulation_stats = accumulator.add_daily_predictions(df)
+        
+        # Step 7: Send email alerts (unless dry run)
+        if not dry_run and len(good_deals) > 0:
+            logger.info("Step 7: Sending email alerts...")
+            send_email_alert(good_deals, len(df))
+        else:
+            logger.info("Step 7: Skipping email (dry run or no deals)")
+        
+        # Prepare results
+        results = make_json_safe({
+            'total_predictions': len(df),
+            'best_deals_count': len(good_deals),
+            'avg_predicted_price': float(df['price_preds'].mean()),
+            'avg_actual_price': float(df['price'].mean()),
+            'top_saving': float(good_deals['price_diff'].max()) if len(good_deals) > 0 else 0,
+            'model_run_id': run_id,
+            's3_keys': s3_keys,
+            'accumulation_stats': accumulation_stats,
+            'dry_run': dry_run
+        })
+        
+        logger.info("✅ Daily predictions completed successfully!")
+        logger.info(f"Results: {json.dumps(results, indent=2)}")
         
         monitor.log_pipeline_success('daily_predictions', results)
         
         return {
             'statusCode': 200,
             'body': json.dumps({
-                'message': 'Daily predictions with monitoring completed successfully',
+                'message': 'Daily predictions completed successfully',
                 'results': results,
                 'timestamp': datetime.now().isoformat()
             })
         }
         
     except Exception as e:
-        print(f"Lambda execution failed: {str(e)}")
+        error_message = f"Daily predictions failed: {str(e)}"
+        logger.error(error_message, exc_info=True)
+        
         monitor.log_pipeline_failure('daily_predictions', e, {
             'event': event,
             'context': str(context)
@@ -534,3 +443,18 @@ def lambda_handler(event, context):
                 'timestamp': datetime.now().isoformat()
             })
         }
+
+
+# For local testing
+if __name__ == "__main__":
+    # Simulate Lambda event
+    test_event = {
+        'dry_run': True,
+        'limit': 50
+    }
+    
+    class MockContext:
+        pass
+    
+    result = lambda_handler(test_event, MockContext())
+    print(json.dumps(result, indent=2))

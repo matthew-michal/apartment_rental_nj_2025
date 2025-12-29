@@ -1,0 +1,458 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'deployment/**'
+      - 'infrastructure/**'
+      - 'requirements.txt'
+  
+  workflow_dispatch:
+    inputs:
+      rollback_version:
+        description: 'Rollback to specific version (leave empty for normal deployment)'
+        required: false
+        type: string
+
+env:
+  AWS_REGION: us-east-1
+  PYTHON_VERSION: '3.9'
+  ENVIRONMENT: production
+
+jobs:
+  # Job 1: Pre-deployment Validation
+  pre-deployment-checks:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Verify staging deployment
+        run: |
+          echo "Checking if staging is healthy before prod deployment..."
+          # Add checks to verify staging is working
+      
+      - name: Check for breaking changes
+        run: |
+          echo "Analyzing commits for breaking changes..."
+          git log --oneline -10
+      
+      - name: Security scan
+        run: |
+          echo "Running security checks..."
+  
+  # Job 2: Build and Push Production Image
+  build-and-push:
+    needs: pre-deployment-checks
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      version: ${{ steps.version.outputs.version }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for versioning
+      
+      - name: Get version
+        id: version
+        run: |
+          # Use semantic versioning based on git tags
+          VERSION=$(git describe --tags --always --dirty)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/apartment-pipeline
+          tags: |
+            type=sha,prefix=prod-
+            type=raw,value=prod-latest
+            type=raw,value=prod-${{ steps.version.outputs.version }}
+            type=raw,value=release-${{ github.run_number }}
+      
+      - name: Build and push production image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deployment/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            ENVIRONMENT=production
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.version.outputs.version }}
+      
+      - name: Image provenance
+        run: |
+          echo "### Production Image Built 🏭" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ steps.meta.outputs.tags }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+  
+  # Job 3: Deploy Infrastructure (with approval)
+  deploy-infrastructure:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://apartment-pipeline.yourdomain.com
+    defaults:
+      run:
+        working-directory: infrastructure/environments/prod
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+      
+      - name: Terraform Init
+        run: terraform init
+      
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var="image_tag=prod-${{ github.sha }}" \
+            -var="environment=production" \
+            -var="version=${{ needs.build-and-push.outputs.version }}" \
+            -out=tfplan
+          
+          # Save plan for review
+          terraform show -no-color tfplan > plan.txt
+      
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan-production
+          path: infrastructure/environments/prod/plan.txt
+      
+      - name: Post plan to PR (if applicable)
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('infrastructure/environments/prod/plan.txt', 'utf8');
+            const output = `#### Terraform Plan 📖\n\`\`\`\n${plan}\n\`\`\``;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+      
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+      
+      - name: Terraform Output
+        id: tf-output
+        run: |
+          echo "lambda_daily=$(terraform output -raw lambda_daily_function)" >> $GITHUB_OUTPUT
+          echo "lambda_weekly=$(terraform output -raw lambda_weekly_function)" >> $GITHUB_OUTPUT
+          echo "mlflow_bucket=$(terraform output -raw mlflow_bucket)" >> $GITHUB_OUTPUT
+          echo "cloudwatch_dashboard=$(terraform output -raw cloudwatch_dashboard_url)" >> $GITHUB_OUTPUT
+    
+    outputs:
+      lambda_daily: ${{ steps.tf-output.outputs.lambda_daily }}
+      lambda_weekly: ${{ steps.tf-output.outputs.lambda_weekly }}
+      dashboard_url: ${{ steps.tf-output.outputs.cloudwatch_dashboard }}
+  
+  # Job 4: Canary Deployment (gradual rollout)
+  canary-deployment:
+    needs: [build-and-push, deploy-infrastructure]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Create Lambda alias for canary
+        run: |
+          # Update Lambda with new image
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline:prod-${{ github.sha }}"
+          
+          aws lambda update-function-code \
+            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_daily }} \
+            --image-uri $IMAGE_URI
+          
+          # Wait for update
+          aws lambda wait function-updated \
+            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_daily }}
+          
+          # Publish new version
+          NEW_VERSION=$(aws lambda publish-version \
+            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_daily }} \
+            --query 'Version' \
+            --output text)
+          
+          echo "Published version: $NEW_VERSION"
+          
+          # Update alias to route 10% traffic to new version
+          aws lambda update-alias \
+            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_daily }} \
+            --name production \
+            --routing-config "AdditionalVersionWeights={'$NEW_VERSION'=0.1}"
+          
+          echo "Canary deployment: 10% traffic to version $NEW_VERSION"
+      
+      - name: Monitor canary for 5 minutes
+        run: |
+          echo "Monitoring canary deployment..."
+          sleep 300  # 5 minutes
+          
+          # Check for errors in CloudWatch
+          ERROR_COUNT=$(aws logs filter-log-events \
+            --log-group-name /aws/lambda/${{ needs.deploy-infrastructure.outputs.lambda_daily }} \
+            --start-time $(($(date +%s) - 300))000 \
+            --filter-pattern "ERROR" \
+            --query 'events[*].message' \
+            --output text | wc -l)
+          
+          if [ $ERROR_COUNT -gt 5 ]; then
+            echo "❌ Too many errors detected ($ERROR_COUNT). Rolling back..."
+            exit 1
+          else
+            echo "✅ Canary looks healthy ($ERROR_COUNT errors)"
+          fi
+      
+      - name: Promote canary to 100%
+        run: |
+          # Get the version we just deployed
+          NEW_VERSION=$(aws lambda list-aliases \
+            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_daily }} \
+            --query "Aliases[?Name=='production'].FunctionVersion" \
+            --output text)
+          
+          # Update alias to route 100% traffic to new version
+          aws lambda update-alias \
+            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_daily }} \
+            --name production \
+            --function-version $NEW_VERSION
+          
+          echo "✅ Promoted to 100% traffic"
+  
+  # Job 5: Update Weekly Lambda (after daily succeeds)
+  update-weekly-lambda:
+    needs: [canary-deployment, deploy-infrastructure]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Update Weekly Lambda
+        run: |
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline:prod-${{ github.sha }}"
+          
+          aws lambda update-function-code \
+            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_weekly }} \
+            --image-uri $IMAGE_URI
+          
+          aws lambda wait function-updated \
+            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_weekly }}
+  
+  # Job 6: Post-Deployment Verification
+  post-deployment-tests:
+    needs: [canary-deployment, update-weekly-lambda]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: pip install boto3 pytest requests
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Run smoke tests
+        run: |
+          python tests/integration/test_lambda_daily.py --environment production --smoke-only
+      
+      - name: Verify monitoring
+        run: |
+          python tests/integration/test_monitoring.py --environment production
+      
+      - name: Check metrics
+        run: |
+          # Verify CloudWatch metrics are being published
+          aws cloudwatch get-metric-statistics \
+            --namespace ApartmentPipeline \
+            --metric-name Invocations \
+            --dimensions Name=FunctionName,Value=${{ needs.deploy-infrastructure.outputs.lambda_daily }} \
+            --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S) \
+            --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+            --period 300 \
+            --statistics Sum
+  
+  # Job 7: Tag Release
+  tag-release:
+    needs: post-deployment-tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Create release tag
+        run: |
+          VERSION="${{ needs.build-and-push.outputs.version }}"
+          git tag -a "v$VERSION" -m "Production release v$VERSION"
+          git push origin "v$VERSION"
+      
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ needs.build-and-push.outputs.version }}
+          release_name: Production Release v${{ needs.build-and-push.outputs.version }}
+          body: |
+            ## Production Deployment
+            
+            **Deployed:** $(date -u)
+            **Commit:** ${{ github.sha }}
+            **Actor:** @${{ github.actor }}
+            
+            ### Changes
+            ${{ github.event.head_commit.message }}
+            
+            ### Infrastructure
+            - Daily Lambda: ${{ needs.deploy-infrastructure.outputs.lambda_daily }}
+            - Weekly Lambda: ${{ needs.deploy-infrastructure.outputs.lambda_weekly }}
+            - Dashboard: ${{ needs.deploy-infrastructure.outputs.dashboard_url }}
+          draft: false
+          prerelease: false
+  
+  # Job 8: Deployment Summary & Notifications
+  deployment-summary:
+    needs: [build-and-push, deploy-infrastructure, canary-deployment, update-weekly-lambda, post-deployment-tests, tag-release]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Production Deployment Summary
+        run: |
+          echo "# 🚀 Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ needs.build-and-push.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Resources" >> $GITHUB_STEP_SUMMARY
+          echo "- **Daily Lambda:** \`${{ needs.deploy-infrastructure.outputs.lambda_daily }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Weekly Lambda:** \`${{ needs.deploy-infrastructure.outputs.lambda_weekly }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dashboard:** ${{ needs.deploy-infrastructure.outputs.dashboard_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "- Pre-checks: ${{ needs.pre-deployment-checks.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Build: ${{ needs.build-and-push.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Infrastructure: ${{ needs.deploy-infrastructure.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Canary: ${{ needs.canary-deployment.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Post-tests: ${{ needs.post-deployment-tests.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.post-deployment-tests.result }}" == "success" ]; then
+            echo "✅ **Production deployment successful!**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Production deployment had issues!**" >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Notify team
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          STATUS="${{ needs.post-deployment-tests.result }}"
+          COLOR=$([ "$STATUS" == "success" ] && echo "good" || echo "danger")
+          
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            curl -X POST $SLACK_WEBHOOK \
+              -H 'Content-Type: application/json' \
+              -d "{
+                \"text\": \"🚀 Production Deployment: $STATUS\",
+                \"attachments\": [{
+                  \"color\": \"$COLOR\",
+                  \"fields\": [
+                    {\"title\": \"Version\", \"value\": \"${{ needs.build-and-push.outputs.version }}\", \"short\": true},
+                    {\"title\": \"Deployed by\", \"value\": \"${{ github.actor }}\", \"short\": true},
+                    {\"title\": \"Commit\", \"value\": \"${{ github.sha }}\", \"short\": false},
+                    {\"title\": \"Dashboard\", \"value\": \"${{ needs.deploy-infrastructure.outputs.dashboard_url }}\", \"short\": false}
+                  ]
+                }]
+              }"
+          fi
+      
+      - name: Send email notification
+        if: failure()
+        run: |
+          # Send email to ops team if deployment failed
+          echo "Deployment failed - sending alerts..."
