@@ -85,6 +85,14 @@ resource "aws_iam_policy" "lambda_custom_policy" {
             "cloudwatch:namespace" = "ApartmentPipeline"
           }
         }
+      },
+      # SQS for dead letter queue
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage"
+        ]
+        Resource = var.dlq_arn
       }
     ]
   })
@@ -172,7 +180,7 @@ resource "aws_lambda_function" "function" {
     Environment = var.environment
     Project     = var.project_name
     ManagedBy   = "Terraform"
-    Version     = var.version
+    Version     = var.image_tag
   }
 }
 

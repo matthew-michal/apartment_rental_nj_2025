@@ -16,7 +16,7 @@ variable "project_name" {
   default     = "apartment-pipeline"
 }
 
-variable "version" {
+variable "image_tag" {
   description = "Version tag for the deployment"
   type        = string
   default     = "latest"

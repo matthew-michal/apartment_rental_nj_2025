@@ -12,13 +12,13 @@ terraform {
   }
 
   # Remote state in S3
-  backend "s3" {
-    bucket         = "apartment-pipeline-terraform-state"
-    key            = "staging/terraform.tfstate"
-    region         = "us-east-1"
-    encrypt        = true
-    dynamodb_table = "terraform-state-lock"
-  }
+#   backend "s3" {
+#     bucket         = "apartment-pipeline-terraform-state"
+#     key            = "staging/terraform.tfstate"
+#     region         = "us-east-1"
+#     encrypt        = true
+#     dynamodb_table = "terraform-state-lock"
+#   }
 }
 
 provider "aws" {
@@ -227,7 +227,6 @@ module "lambda_daily" {
   function_name         = "${local.project_name}-daily-predictions-${local.environment}"
   environment           = local.environment
   project_name          = local.project_name
-  version               = var.image_tag
   image_uri             = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
   handler_command       = ["deployment.lambda.lambda_daily_run.lambda_handler"]
   memory_size           = 1024
@@ -256,7 +255,6 @@ module "lambda_weekly" {
   function_name         = "${local.project_name}-weekly-training-${local.environment}"
   environment           = local.environment
   project_name          = local.project_name
-  version               = var.image_tag
   image_uri             = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
   handler_command       = ["deployment.lambda.lambda_training.lambda_handler"]
   memory_size           = 2048

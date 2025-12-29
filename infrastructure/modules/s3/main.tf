@@ -58,7 +58,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "bucket_lifecycle" {
 
       # Transition to cheaper storage classes
       dynamic "transition" {
-        for_each = lookup(rule.value, "transitions", [])
+        for_each = lookup(rule.value, "transitions", null) != null ? rule.value.transitions : []
         content {
           days          = transition.value.days
           storage_class = transition.value.storage_class
