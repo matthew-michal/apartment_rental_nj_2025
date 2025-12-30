@@ -2,13 +2,15 @@ name: Deploy to Production
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'src/**'
-      - 'deployment/**'
-      - 'infrastructure/**'
-      - 'requirements.txt'
+    tags:
+      - 'v*.*.*'  # Only run on version tags like v1.0.0
+    # branches:
+    #   - main
+    # paths:
+    #   - 'src/**'
+    #   - 'deployment/**'
+    #   - 'infrastructure/**'
+    #   - 'requirements.txt'
   
   workflow_dispatch:
     inputs:
