@@ -134,9 +134,9 @@ jobs:
       - name: Terraform Output
         id: tf-output
         run: |
-          echo "lambda_daily=$(terraform output -raw lambda_daily_function)" >> $GITHUB_OUTPUT
-          echo "lambda_weekly=$(terraform output -raw lambda_weekly_function)" >> $GITHUB_OUTPUT
-          echo "mlflow_bucket=$(terraform output -raw mlflow_bucket)" >> $GITHUB_OUTPUT
+          echo "lambda_daily=$(terraform output -raw daily_lambda_function_name)" >> $GITHUB_OUTPUT
+          echo "lambda_weekly=$(terraform output -raw training_lambda_function_name)" >> $GITHUB_OUTPUT
+          echo "mlflow_bucket=$(terraform output -raw mlflow_bucket_name)" >> $GITHUB_OUTPUT
       
       - name: Summary
         run: |
