@@ -12,13 +12,13 @@ terraform {
   }
 
   # Remote state in S3
-  #   backend "s3" {
-  #     bucket         = "apartment-pipeline-terraform-state"
-  #     key            = "staging/terraform.tfstate"
-  #     region         = "us-east-1"
-  #     encrypt        = true
-  #     dynamodb_table = "terraform-state-lock"
-  #   }
+    backend "s3" {
+      bucket         = "apartment-pipeline-terraform-state-231917356461"
+      key            = "staging/terraform.tfstate"
+      region         = "us-east-1"
+      encrypt        = true
+      dynamodb_table = "terraform-state-lock"
+    }
 }
 
 provider "aws" {
