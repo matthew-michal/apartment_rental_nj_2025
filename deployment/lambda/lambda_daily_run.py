@@ -373,8 +373,32 @@ def lambda_handler(event, context):
         monitor.log_data_quality_metrics(df, 'daily_listings')
         
         # Step 2: Load model
-        logger.info("Step 2: Loading trained model...")
-        model, run_id = load_model()
+        if not dry_run:
+            logger.info("Step 2: Loading trained model...")
+            model, run_id = load_model()
+        else:
+            logger.info("Step 2: Skipping model load in dry run mode")
+            logger.info("   Creating dummy model for testing...")
+            
+            # Create a simple dummy model for dry run testing
+            from sklearn.linear_model import LinearRegression
+            from sklearn.pipeline import Pipeline
+            from src.models.training import LabelEncoderTransformer
+            
+            # Train a quick dummy model on the sample data
+            X_sample = create_X(df.copy())
+            dummy_regressor = LinearRegression()
+            
+            model = Pipeline([
+                ('encoder', LabelEncoderTransformer()),
+                ('regressor', dummy_regressor)
+            ])
+            
+            # Fit on sample data so predictions work
+            model.fit(X_sample, df['price'])
+            run_id = "dry-run-dummy-model"
+            
+            logger.info("   ✅ Dummy model created for dry run")
         
         # Step 3: Make predictions
         logger.info("Step 3: Making predictions...")
