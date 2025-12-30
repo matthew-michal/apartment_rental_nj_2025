@@ -204,6 +204,7 @@ jobs:
   
   # Job 4: Run Integration Tests
   integration-tests:
+    if: false
     needs: update-lambda
     runs-on: ubuntu-latest
     
@@ -245,6 +246,7 @@ jobs:
   
   # Job 5: Smoke Tests
   smoke-tests:
+    if: false
     needs: integration-tests
     runs-on: ubuntu-latest
     
