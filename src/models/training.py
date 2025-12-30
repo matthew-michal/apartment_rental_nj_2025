@@ -12,7 +12,30 @@ from sklearn.metrics import mean_squared_error
 import matplotlib.pyplot as plt
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from hyperopt.pyll import scope
-from prefect import flow, task
+# Optional Prefect support - works with or without Prefect installed
+try:
+    from prefect import flow, task
+    PREFECT_AVAILABLE = True
+except ImportError:
+    PREFECT_AVAILABLE = False
+    # Dummy decorators when Prefect is not available
+    def flow(*args, **kwargs):
+        """No-op decorator when Prefect is not installed"""
+        def decorator(func):
+            return func
+        # Handle both @flow and @flow()
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+        return decorator
+    
+    def task(*args, **kwargs):
+        """No-op decorator when Prefect is not installed"""
+        def decorator(func):
+            return func
+        # Handle both @task and @task(retries=3)
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+        return decorator
 from sklearn.preprocessing import LabelEncoder
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
