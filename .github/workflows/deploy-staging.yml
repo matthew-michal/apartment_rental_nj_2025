@@ -115,7 +115,7 @@ jobs:
         id: plan
         run: |
           terraform plan \
-            -var="image_tag=staging-${{ github.sha }}" \
+            -var="image_tag=staging-latest" \
             -var="environment=staging" \
             -out=tfplan
       
@@ -167,7 +167,7 @@ jobs:
       
       - name: Update Daily Lambda
         run: |
-          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:staging-${{ github.sha }}"
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:staging-latest"
           
           echo "Updating Lambda: ${{ needs.deploy-infrastructure.outputs.lambda_daily }}"
           echo "With image: $IMAGE_URI"
