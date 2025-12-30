@@ -65,7 +65,8 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
                 X_copy.loc[~mask, col] = 0
         return X_copy
 
-os.environ["AWS_PROFILE"] = "default"
+if not os.environ.get('AWS_EXECUTION_ENV'):
+    os.environ["AWS_PROFILE"] = "default"
 
 TRACKING_SERVER_HOST = "ec2-3-80-40-111.compute-1.amazonaws.com" # fill in with the public DNS of the EC2 instance
 mlflow.set_tracking_uri(f"http://{TRACKING_SERVER_HOST}:5000")
