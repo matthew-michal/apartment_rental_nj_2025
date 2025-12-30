@@ -114,11 +114,8 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: |
-          IMAGE_TAG=$(echo "${{ needs.build-and-push.outputs.image-tag }}" | grep "staging-latest" | head -1)
-          echo "Using image tag: $IMAGE_TAG"
-          
           terraform plan \
-            -var="image_tag=staging-latest" \
+            -var="image_tag=staging-${{ github.run_number }}" \
             -var="environment=staging" \
             -out=tfplan
       
@@ -170,8 +167,7 @@ jobs:
       
       - name: Update Daily Lambda
         run: |
-          # Use the full image URI with digest for reliability
-          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging@${{ needs.build-and-push.outputs.image-digest }}"
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:staging-${{ github.run_number }}"
           
           echo "Updating Lambda: ${{ needs.deploy-infrastructure.outputs.lambda_daily }}"
           echo "With image: $IMAGE_URI"
@@ -188,9 +184,8 @@ jobs:
       
       - name: Update Weekly Lambda
         run: |
-          # Use the full image URI with digest for reliability
-          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging@${{ needs.build-and-push.outputs.image-digest }}"
-          
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:staging-${{ github.run_number }}"
+    
           echo "Updating Lambda: ${{ needs.deploy-infrastructure.outputs.lambda_weekly }}"
           echo "With image: $IMAGE_URI"
           
