@@ -338,7 +338,7 @@ def lambda_handler(event, context):
         monitor.log_pipeline_start('daily_predictions', event)
         
         # Parse event parameters
-        dry_run = event.get('dry_run', False)
+        dry_run = event.get('dry_run', True)
         limit = event.get('limit', None)
         min_savings = event.get('min_savings', 100.0)
         
