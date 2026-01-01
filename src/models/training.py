@@ -139,11 +139,17 @@ def find_station(lat_long):
 
 @task(retries=4, retry_delay_seconds=2, log_prints=True)
 def read_dataframe():
-    df = pd.read_csv('seventh_load.csv')
-    df2 = pd.read_csv('training_load.csv')
-    df = pd.concat([df,df2]).drop_duplicates()
+    # Get environment and account info
+    environment = os.environ.get('ENVIRONMENT', 'staging')
+    account_id = sts.get_caller_identity()['Account']
+    bucket = f"apartment-pipeline-training-{environment}-{account_id}"
+    
+    # Read from S3
+    df = pd.read_csv(f's3://{bucket}/training/seventh_load.csv')
+    df2 = pd.read_csv(f's3://{bucket}/training/training_load.csv')
+    df = pd.concat([df, df2]).drop_duplicates()
     print(df.shape)
-
+    
     return df
 
 

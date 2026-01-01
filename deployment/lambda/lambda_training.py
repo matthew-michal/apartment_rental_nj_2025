@@ -25,9 +25,14 @@ s3_client = boto3.client('s3')
 ssm_client = boto3.client('ssm')
 monitor = MLPipelineMonitor()
 
-# Configuration using your specific buckets
-MLFLOW_BUCKET = 'mlflow-artifact-mmichal'
-TRAINING_BUCKET = 'training-data-bucket-mmichal-apartments-nj'
+# Get environment dynamically
+ENVIRONMENT = os.environ.get('ENVIRONMENT', 'staging')
+sts_client = boto3.client('sts')
+ACCOUNT_ID = sts_client.get_caller_identity()['Account']
+
+# Use new Terraform-managed buckets
+MLFLOW_BUCKET = f'apartment-pipeline-mlflow-{ENVIRONMENT}-{ACCOUNT_ID}'
+TRAINING_BUCKET = f'apartment-pipeline-training-{ENVIRONMENT}-{ACCOUNT_ID}'
 MLFLOW_TRACKING_URI = os.environ.get('MLFLOW_TRACKING_URI')
 
 def make_json_safe(obj):
@@ -139,62 +144,41 @@ def lambda_handler(event, context):
         print(f"Starting model training at {datetime.now()}")
         monitor.log_pipeline_start('training', event)
         
-        # Set MLflow tracking URI
-        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-        mlflow.set_experiment("north-nj-apartments-experiment-v3")
+        # Import and run the training pipeline from training.py
+        from src.models.training import run
         
-        # Load training data from your S3 bucket
-        df = download_training_data()
+        # Run the training pipeline (handles everything internally)
+        run_id = run()
         
-        # Prepare features
-        feats = [
-            'latitude', 'longitude',
-            'propertyType','bedrooms', 'bathrooms', 'yearBuilt', 'lotSize'
-        ]
+        # Save run_id to S3 for daily predictions to use
+        environment = os.environ.get('ENVIRONMENT', 'staging')
+        sts = boto3.client('sts')
+        account_id = sts.get_caller_identity()['Account']
+        mlflow_bucket = f"apartment-pipeline-mlflow-{environment}-{account_id}"
         
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            df[feats], df.price, test_size=0.2, random_state=42
+        # Save run_id to S3
+        run_id_content = run_id.encode('utf-8')
+        s3_client.put_object(
+            Bucket=mlflow_bucket,
+            Key='models/run_id.txt',
+            Body=run_id_content
         )
         
-        print(f"Training set size: {X_train.shape}")
-        print(f"Test set size: {X_test.shape}")
-        
-        # Create features (add station information)
-        X_train = create_X(X_train)
-        X_test = create_X(X_test)
-        
-        # Hyperparameter tuning
-        print("Starting hyperparameter tuning...")
-        best_params, best_rmse = tune_models(X_train, y_train, X_test, y_test)
-        print(f"Best hyperparameters found with RMSE: {best_rmse}")
-        
-        # Train final model
-        print("Training final model...")
-        run_id = train_model(X_train, y_train, X_test, y_test, best_params)
-        
-        # Log model performance
-        monitor.log_model_performance({
-            'rmse': float(best_rmse),
-            'training_samples': len(X_train),
-            'test_samples': len(X_test)
-        })
-        
-        # Save artifacts to your S3 buckets
-        save_model_artifacts(run_id)
-        
-        results = make_json_safe({
-            'run_id': run_id,
-            'best_rmse': best_rmse,
-            'best_params': best_params,
-            'training_samples': len(X_train),
-            'test_samples': len(X_test),
-            'features_used': feats + ['station']
-        })
+        # Also save with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        s3_client.put_object(
+            Bucket=mlflow_bucket,
+            Key=f'models/run_id_{timestamp}.txt',
+            Body=run_id_content
+        )
         
         print(f"Model training completed successfully!")
         print(f"Run ID: {run_id}")
-        print(f"Best RMSE: {best_rmse}")
+        
+        results = {
+            'run_id': run_id,
+            'timestamp': datetime.now().isoformat()
+        }
         
         monitor.log_pipeline_success('training', results)
         
@@ -202,13 +186,16 @@ def lambda_handler(event, context):
             'statusCode': 200,
             'body': json.dumps({
                 'message': 'Model training completed successfully',
-                'results': results,
+                'run_id': run_id,
                 'timestamp': datetime.now().isoformat()
             })
         }
         
     except Exception as e:
         print(f"Training Lambda execution failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
         monitor.log_pipeline_failure('training', e, {
             'event': event,
             'context': str(context)
