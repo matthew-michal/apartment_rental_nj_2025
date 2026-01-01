@@ -288,7 +288,7 @@ def train_model(X_train, y_train, X_test, y_test, best):
         mlflow.sklearn.log_model(
             sk_model=pipeline,
             artifact_path="pipeline_model",
-            registered_model_name="apartment-rent-pipeline"  # Optional
+            # registered_model_name="apartment-rent-pipeline"  # Optional #Issue with S3 and MLFlow so don't run
         )
         
         run_id = run.info.run_id
