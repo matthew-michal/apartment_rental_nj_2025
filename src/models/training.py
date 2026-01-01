@@ -139,14 +139,24 @@ def find_station(lat_long):
 
 @task(retries=4, retry_delay_seconds=2, log_prints=True)
 def read_dataframe():
+    import io
+    
     # Get environment and account info
     environment = os.environ.get('ENVIRONMENT', 'staging')
     account_id = sts.get_caller_identity()['Account']
     bucket = f"apartment-pipeline-training-{environment}-{account_id}"
     
-    # Read from S3
-    df = pd.read_csv(f's3://{bucket}/training/seventh_load.csv')
-    df2 = pd.read_csv(f's3://{bucket}/training/training_load.csv')
+    # Use boto3 to read from S3 (avoids fsspec/s3fs dependency conflicts)
+    s3 = boto3.client('s3')
+    
+    # Read seventh_load.csv
+    obj1 = s3.get_object(Bucket=bucket, Key='training/seventh_load.csv')
+    df = pd.read_csv(io.BytesIO(obj1['Body'].read()))
+    
+    # Read training_load.csv
+    obj2 = s3.get_object(Bucket=bucket, Key='training/training_load.csv')
+    df2 = pd.read_csv(io.BytesIO(obj2['Body'].read()))
+    
     df = pd.concat([df, df2]).drop_duplicates()
     print(df.shape)
     
