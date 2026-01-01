@@ -131,7 +131,7 @@ def find_station(lat_long):
     return 'not close'
 
 
-mlflow.set_experiment("north-nj-apartments-experiment-v3")
+# mlflow.set_experiment("north-nj-apartments-experiment-v3")
 
 # models_folder = Path('models')
 # models_folder.mkdir(exist_ok=True)
