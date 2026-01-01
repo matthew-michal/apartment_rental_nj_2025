@@ -68,8 +68,14 @@ def load_model():
     try:
         logger.info("Loading model from MLflow...")
         
-        # Set MLflow tracking URI
-        mlflow.set_tracking_uri(config.mlflow_tracking_uri)
+        # Get AWS account ID for S3-based MLflow
+        sts = boto3.client('sts')
+        account_id = sts.get_caller_identity()['Account']
+        environment = os.environ.get('ENVIRONMENT', 'staging')
+
+        # Set S3-based MLflow tracking (no EC2 server needed)
+        mlflow_bucket = f"apartment-pipeline-mlflow-{environment}-{account_id}"
+        mlflow.set_tracking_uri(f"s3://{mlflow_bucket}/mlflow")
         
         # Get the latest run ID from S3
         try:

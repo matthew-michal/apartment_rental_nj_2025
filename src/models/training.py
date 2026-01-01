@@ -8,6 +8,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 import mlflow
 import os
+import boto3
 from sklearn.metrics import mean_squared_error
 import matplotlib.pyplot as plt
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
@@ -68,8 +69,18 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
 if not os.environ.get('AWS_EXECUTION_ENV'):
     os.environ["AWS_PROFILE"] = "default"
 
-TRACKING_SERVER_HOST = "ec2-3-80-40-111.compute-1.amazonaws.com" # fill in with the public DNS of the EC2 instance
-mlflow.set_tracking_uri(f"http://{TRACKING_SERVER_HOST}:5000")
+# # Old hard-coded copy of code
+# TRACKING_SERVER_HOST = "ec2-3-80-40-111.compute-1.amazonaws.com" # fill in with the public DNS of the EC2 instance
+# mlflow.set_tracking_uri(f"http://{TRACKING_SERVER_HOST}:5000")
+
+# Get AWS account ID for S3-based MLflow
+sts = boto3.client('sts')
+account_id = sts.get_caller_identity()['Account']
+environment = os.environ.get('ENVIRONMENT', 'staging')
+
+# Set S3-based MLflow tracking (no EC2 server needed)
+mlflow_bucket = f"apartment-pipeline-mlflow-{environment}-{account_id}"
+mlflow.set_tracking_uri(f"s3://{mlflow_bucket}/mlflow")
 
 nj_transit_locations = {
     'brick_church': [40.76581846318419, -74.21915255150205],
