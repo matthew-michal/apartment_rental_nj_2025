@@ -1,42 +1,71 @@
-variable "aws_region" {
-  description = "AWS region to deploy resources"
-  type        = string
-  default     = "us-east-1"
-}
+# infrastructure/environments/staging/variables.tf
 
 variable "environment" {
-  description = "Environment name (staging/production)"
+  description = "Environment name"
   type        = string
   default     = "staging"
 }
 
-variable "project_name" {
-  description = "Project name for resource naming"
+variable "aws_region" {
+  description = "AWS region"
   type        = string
-  default     = "apartment-rental-nj"
+  default     = "us-east-1"
 }
 
-variable "image_tag" {
-  description = "Docker image tag for Lambda deployment"
-  type        = string
-  default     = "staging-latest"
-}
-
-variable "alert_email" {
-  description = "Email address for CloudWatch alerts"
+variable "vpc_id" {
+  description = "VPC ID to deploy resources"
   type        = string
 }
 
-variable "rentcast_api_key" {
-  description = "Rentcast API key (will be stored in Secrets Manager)"
+variable "ecr_repository_name" {
+  description = "ECR repository name"
   type        = string
-  sensitive   = true
-  default     = ""
 }
 
-variable "db_password" {
-  description = "Database password (will be stored in Secrets Manager)"
+variable "mlflow_db_instance_class" {
+  description = "RDS instance class for MLflow database"
   type        = string
-  sensitive   = true
-  default     = ""
+  default     = "db.t3.micro"
+}
+
+variable "mlflow_server_cpu" {
+  description = "CPU units for MLflow server"
+  type        = number
+  default     = 512
+}
+
+variable "mlflow_server_memory" {
+  description = "Memory for MLflow server in MB"
+  type        = number
+  default     = 1024
+}
+
+variable "training_cpu" {
+  description = "CPU units for training task"
+  type        = number
+  default     = 2048
+}
+
+variable "training_memory" {
+  description = "Memory for training task in MB"
+  type        = number
+  default     = 4096
+}
+
+variable "training_schedule" {
+  description = "EventBridge schedule for training"
+  type        = string
+  default     = "cron(0 15 ? * SUN *)"
+}
+
+variable "daily_lambda_memory" {
+  description = "Memory for daily predictions Lambda"
+  type        = number
+  default     = 1024
+}
+
+variable "daily_lambda_timeout" {
+  description = "Timeout for daily predictions Lambda"
+  type        = number
+  default     = 300
 }

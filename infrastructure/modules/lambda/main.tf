@@ -119,11 +119,11 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
 resource "aws_lambda_function" "function" {
   function_name = var.function_name
   role          = aws_iam_role.lambda_role.arn
-  
+
   # Container image from ECR
   package_type = "Image"
   image_uri    = var.image_uri
-  
+
   # Image config specifies the CMD override
   image_config {
     command = var.handler_command
@@ -132,15 +132,15 @@ resource "aws_lambda_function" "function" {
   # Resource configuration
   memory_size = var.memory_size
   timeout     = var.timeout
-  
+
   # Environment variables
   environment {
     variables = merge(
       {
-        ENVIRONMENT        = var.environment
-        MLFLOW_BUCKET      = var.mlflow_bucket_name
-        TRAINING_BUCKET    = var.training_bucket_name
-        LOG_LEVEL         = var.log_level
+        ENVIRONMENT     = var.environment
+        MLFLOW_BUCKET   = var.mlflow_bucket_name
+        TRAINING_BUCKET = var.training_bucket_name
+        LOG_LEVEL       = var.log_level
       },
       var.environment_variables
     )

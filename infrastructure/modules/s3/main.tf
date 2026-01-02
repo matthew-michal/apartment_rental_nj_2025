@@ -74,11 +74,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "bucket_lifecycle" {
       }
 
       # Filter by prefix if specified
-      dynamic "filter" {
-        for_each = lookup(rule.value, "prefix", null) != null ? [1] : []
-        content {
-          prefix = rule.value.prefix
-        }
+      filter {
+        # If prefix specified, use it; otherwise empty filter = all objects
+        prefix = lookup(rule.value, "prefix", "")
+
       }
     }
   }

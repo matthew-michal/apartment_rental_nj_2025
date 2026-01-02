@@ -1,46 +1,39 @@
 import xgboost as xgb
 import pandas as pd
 from pathlib import Path
-import pickle
-from math import radians, cos
-from datetime import datetime, date, timedelta
-import pandas as pd
-from sklearn.model_selection import train_test_split
-import mlflow
+from datetime import datetime
 import os
 import boto3
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
-import matplotlib.pyplot as plt
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
-from hyperopt.pyll import scope
-# Optional Prefect support - works with or without Prefect installed
+import mlflow
+import mlflow.sklearn
+import mlflow.xgboost
+
+# Optional Prefect support
 try:
     from prefect import flow, task
     PREFECT_AVAILABLE = True
 except ImportError:
     PREFECT_AVAILABLE = False
-    # Dummy decorators when Prefect is not available
     def flow(*args, **kwargs):
-        """No-op decorator when Prefect is not installed"""
         def decorator(func):
             return func
-        # Handle both @flow and @flow()
         if len(args) == 1 and callable(args[0]) and not kwargs:
             return args[0]
         return decorator
     
     def task(*args, **kwargs):
-        """No-op decorator when Prefect is not installed"""
         def decorator(func):
             return func
-        # Handle both @task and @task(retries=3)
         if len(args) == 1 and callable(args[0]) and not kwargs:
             return args[0]
         return decorator
+
 from sklearn.preprocessing import LabelEncoder
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
-import xgboost as xgb
 
 class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
     def __init__(self, columns=['propertyType', 'station']):
@@ -58,29 +51,26 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
         X_copy = X.copy()
         for col in self.columns:
             if col in X_copy.columns and col in self.encoders:
-                # Handle unseen labels by filtering or using a default
                 encoder = self.encoders[col]
                 mask = X_copy[col].isin(encoder.classes_)
                 X_copy.loc[mask, col] = encoder.transform(X_copy.loc[mask, col])
-                # For unseen values, assign 0 (or could use most frequent class)
                 X_copy.loc[~mask, col] = 0
         return X_copy
 
+# AWS Configuration
 if not os.environ.get('AWS_EXECUTION_ENV'):
     os.environ["AWS_PROFILE"] = "default"
 
-# # Old hard-coded copy of code
-# TRACKING_SERVER_HOST = "ec2-3-80-40-111.compute-1.amazonaws.com" # fill in with the public DNS of the EC2 instance
-# mlflow.set_tracking_uri(f"http://{TRACKING_SERVER_HOST}:5000")
-
-# Get AWS account ID for S3-based MLflow
 sts = boto3.client('sts')
 account_id = sts.get_caller_identity()['Account']
 environment = os.environ.get('ENVIRONMENT', 'staging')
 
-# Set S3-based MLflow tracking (no EC2 server needed)
-mlflow_bucket = f"apartment-pipeline-mlflow-{environment}-{account_id}"
-mlflow.set_tracking_uri(f"s3://{mlflow_bucket}/mlflow")
+# MLflow Configuration
+MLFLOW_TRACKING_URI = os.environ.get('MLFLOW_TRACKING_URI', 'http://localhost:5000')
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_experiment("apartment-rental-price-prediction")
+
+print(f"MLflow Tracking URI: {MLFLOW_TRACKING_URI}")
 
 nj_transit_locations = {
     'brick_church': [40.76581846318419, -74.21915255150205],
@@ -91,7 +81,7 @@ nj_transit_locations = {
     'east_orange': [40.761460414532, -74.21100276083385],
     'hackettstown': [40.85215082333791, -74.83467888781628],
     'highland_avenue': [40.766972457228775, -74.24355123014908],
-    'hoboken': [40.70898046045857, -74.0246430608362], #
+    'hoboken': [40.70898046045857, -74.0246430608362],
     'lake_hopatcong': [40.904119814030835, -74.66555031993157],
     'madison': [40.757211574757704, -74.41541459013588],
     'maplewood': [40.7311582228973, -74.27530904549292],
@@ -111,8 +101,6 @@ nj_transit_locations = {
     'summit': [40.71681594165216, -74.35768690713812]
 }
 
-
-
 def find_station(lat_long):
     apt_lat, apt_long = lat_long.split('_')
     apt_lat, apt_long = float(apt_lat), float(apt_long)
@@ -120,84 +108,61 @@ def find_station(lat_long):
     for train_station, locations in nj_transit_locations.items():
         middle_lat = locations[0]
         middle_long = locations[1]
-
         small_lat, large_lat = middle_lat - 0.75 / 68.97, middle_lat + 0.75 / 68.97
         small_long, large_long = middle_long - 0.75 / 55.77, middle_long + 0.75 / 55.77
 
         if apt_lat >= small_lat and apt_lat <= large_lat:
             if apt_long >= small_long and apt_long <= large_long:
                 return train_station
-
     return 'not close'
-
-
-# mlflow.set_experiment("north-nj-apartments-experiment-v3")
-
-# models_folder = Path('models')
-# models_folder.mkdir(exist_ok=True)
 
 
 @task(retries=4, retry_delay_seconds=2, log_prints=True)
 def read_dataframe():
     import io
     
-    # Get environment and account info
-    environment = os.environ.get('ENVIRONMENT', 'staging')
-    account_id = sts.get_caller_identity()['Account']
     bucket = f"apartment-pipeline-training-{environment}-{account_id}"
+    print(f"Loading training data from s3://{bucket}/training/")
     
-    # Use boto3 to read from S3 (avoids fsspec/s3fs dependency conflicts)
     s3 = boto3.client('s3')
     
     # Read seventh_load.csv
     obj1 = s3.get_object(Bucket=bucket, Key='training/seventh_load.csv')
     df = pd.read_csv(io.BytesIO(obj1['Body'].read()))
+    print(f"Loaded seventh_load.csv: {df.shape}")
     
     # Read training_load.csv
     obj2 = s3.get_object(Bucket=bucket, Key='training/training_load.csv')
     df2 = pd.read_csv(io.BytesIO(obj2['Body'].read()))
+    print(f"Loaded training_load.csv: {df2.shape}")
     
     df = pd.concat([df, df2]).drop_duplicates()
-    print(df.shape)
+    print(f"Combined dataset: {df.shape}")
     
     return df
 
 
 @task(retries=2, retry_delay_seconds=2)
 def create_X(df):
-    # df.zipCode = df.zipCode.astype(str)
     df['lat_long'] = df.latitude.astype(str) + '_' + df.longitude.astype(str)
     df['station'] = df.lat_long.apply(find_station)
-
+    
     feats = [
-        # 'city',
-        'latitude', 'longitude',
-        'station',
-        'propertyType','bedrooms', 'bathrooms', 'yearBuilt', 'lotSize'
+        'latitude', 'longitude', 'station',
+        'propertyType', 'bedrooms', 'bathrooms', 'yearBuilt', 'lotSize'
     ]
+    
+    return df[feats]
 
-
-    X = df[feats]
-
-    # if le_pt is None:
-    #     le_pt = LabelEncoder()
-    #     X['propertyType'] = le_pt.fit_transform(X['propertyType'])
-    # else:
-    #     X['propertyType'] = le_pt.transform(X['propertyType'])
-
-    # if le_station is None:
-    #     le_station = LabelEncoder()
-    #     X['station'] = le_station.fit_transform(X['station'])
-    # else:
-    #     X['station'] = le_station.transform(X['station'])
-
-    # return X, le_pt, le_station
-    return X
 
 @task(retries=2, retry_delay_seconds=2, log_prints=True)
 def tune_models(X_train, y_train, X_test, y_test):
-
-    # Define search space
+    """Hyperparameter tuning WITH MLflow tracking"""
+    
+    print("="*60)
+    print("Starting hyperparameter tuning with MLflow tracking...")
+    print("="*60)
+    
     space = {
         'learning_rate': hp.uniform('learning_rate', 0.01, 0.3),
         'max_depth': hp.choice('max_depth', range(3, 10)),
@@ -207,195 +172,192 @@ def tune_models(X_train, y_train, X_test, y_test):
     }
     
     def objective(params):
-        with mlflow.start_run():
-            # Log parameters
+        # Start MLflow run for this trial
+        with mlflow.start_run(nested=True):
             mlflow.log_params(params)
+            mlflow.set_tag("model_type", "xgboost")
+            mlflow.set_tag("phase", "hyperparameter_tuning")
             
-            # Train model
             model = xgb.XGBRegressor(
-                objective='reg:linear',
+                objective='reg:squarederror',
                 n_estimators=100,
                 random_state=42,
                 **params
             )
+            
             pipeline = Pipeline([
                 ('encoder', LabelEncoderTransformer()),
                 ('regressor', model)
             ])
             
             pipeline.fit(X_train, y_train)
-            
-            # Make predictions
             y_pred = pipeline.predict(X_test)
             
-            # Calculate RMSE
             rmse = (mean_squared_error(y_test, y_pred))**(0.5)
+            mse = mean_squared_error(y_test, y_pred)
             
-            # Log metrics
             mlflow.log_metric("rmse", rmse)
-            mlflow.log_metric("mse", mean_squared_error(y_test, y_pred))
+            mlflow.log_metric("mse", mse)
             
-            # Log model
-            mlflow.xgboost.log_model(model, "model")
+            print(f"Trial RMSE: {rmse:.2f} | lr={params['learning_rate']:.3f}, depth={params['max_depth']}")
             
             return {'loss': rmse, 'status': STATUS_OK}
     
-    # Run hyperparameter optimization
+    # Run optimization
     trials = Trials()
     best = fmin(
         fn=objective,
         space=space,
         algo=tpe.suggest,
-        max_evals=50,  # Adjust based on your time constraints
+        max_evals=50,
         trials=trials
     )
     
-    # Get the best run
     best_run = min(trials.results, key=lambda x: x['loss'])
     best_rmse = best_run['loss']
     
+    print("="*60)
+    print(f"Hyperparameter tuning complete!")
     print(f"Best hyperparameters: {best}")
-    print(f"Best RMSE: {best_rmse}")
+    print(f"Best RMSE: {best_rmse:.2f}")
+    print("="*60)
     
     return best, best_rmse
 
 
-
 @task(retries=2, retry_delay_seconds=2, log_prints=True)
-def train_model(X_train, y_train, X_test, y_test, best):
-
-
-
-    # train = xgb.DMatrix(X_train, label=y_train,enable_categorical=True)
-    # valid = xgb.DMatrix(X_test, label=y_test,enable_categorical=True)
-
-    # best_params = {
-    #     'learning_rate': 0.05972322932431019,
-    #     'max_depth': 6,
-    #     'min_child_weight': 10.65084675866938,
-    #     'objective': 'reg:linear',
-    #     'reg_alpha': 0.3134223536955863,
-    #     'reg_lambda': 0.08592250762440364,
-    #     'seed': 42
-    # }
-    best_params = best
-    best_params['objective'] = 'reg:linear'
+def train_model(X_train, y_train, X_test, y_test, best, best_rmse):
+    """Train final model and log to MLflow"""
+    
+    print("="*60)
+    print("Training final model with best parameters...")
+    print("="*60)
+    
+    best_params = best.copy()
+    best_params['objective'] = 'reg:squarederror'
     best_params['seed'] = 42
+    
+    # Create pipeline
+    pipeline = Pipeline([
+        ('encoder', LabelEncoderTransformer()),
+        ('regressor', xgb.XGBRegressor(**best_params, n_estimators=1000))
+    ])
+    
+    # Fit pipeline
+    pipeline.fit(X_train, y_train)
+    
+    # Evaluate
+    y_pred = pipeline.predict(X_test)
+    rmse = (mean_squared_error(y_test, y_pred))**(0.5)
+    mse = mean_squared_error(y_test, y_pred)
+    
+    print(f"Final model RMSE: {rmse:.2f}")
+    print(f"Final model MSE: {mse:.2f}")
+    
+    # Log everything to MLflow (this happens within the parent run)
+    mlflow.log_params(best_params)
+    mlflow.log_param("n_estimators", 1000)
+    mlflow.log_param("training_samples", len(X_train))
+    mlflow.log_param("test_samples", len(X_test))
+    
+    mlflow.log_metric("final_rmse", rmse)
+    mlflow.log_metric("final_mse", mse)
+    mlflow.log_metric("best_tuning_rmse", best_rmse)
+    
+    mlflow.set_tag("model_type", "xgboost_production")
+    mlflow.set_tag("environment", environment)
+    mlflow.set_tag("features", ",".join(X_train.columns.tolist()))
+    
+    # Log model using MLflow
+    mlflow.sklearn.log_model(
+        sk_model=pipeline,
+        artifact_path="model",
+        registered_model_name=f"apartment-rental-predictor-{environment}"
+    )
+    
+    print("="*60)
+    print("Model logged to MLflow successfully!")
+    print("="*60)
+    
+    return rmse
 
-    with mlflow.start_run() as run:
-        
-        mlflow.log_params(best_params)
-        
-        # Create and train the pipeline instead of individual components
-        pipeline = Pipeline([
-            ('encoder', LabelEncoderTransformer()),
-            ('regressor', xgb.XGBRegressor(**best_params, n_estimators=1000))
-        ])
-        
-        # Fit the pipeline (this will fit both the encoder and XGBoost)
-        pipeline.fit(X_train, y_train)
-        
-        # Make predictions for evaluation
-        y_pred = pipeline.predict(X_test)  # Use X_test instead of valid
-        rmse = (mean_squared_error(y_test, y_pred))**(0.5)
-        mlflow.log_metric("rmse", rmse)
-        
-        # Log the entire pipeline as a sklearn model
-        mlflow.sklearn.log_model(
-            sk_model=pipeline,
-            artifact_path="pipeline_model",
-            # registered_model_name="apartment-rent-pipeline"  # Optional #Issue with S3 and MLFlow so don't run
-        )
-        
-        run_id = run.info.run_id
-
-    return run_id   
 
 @flow
 def run():
-    df = read_dataframe()
+    """Main training flow with MLflow tracking"""
     
-    feats = [
-        # 'city',
-        'latitude', 'longitude',
-        # 'station',
-        'propertyType','bedrooms', 'bathrooms', 'yearBuilt', 'lotSize'
-    ]
+    print("="*60)
+    print("NJ Apartment Rental Price Prediction - Model Training")
+    print(f"Environment: {environment}")
+    print(f"MLflow Tracking URI: {MLFLOW_TRACKING_URI}")
+    print("="*60)
+    
+    # Start parent MLflow run
+    with mlflow.start_run(run_name=f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}") as run:
+        
+        mlflow.set_tag("pipeline", "apartment_rental_training")
+        mlflow.set_tag("environment", environment)
+        mlflow.set_tag("date", datetime.now().isoformat())
+        
+        # Load data
+        df = read_dataframe()
+        mlflow.log_param("total_samples", len(df))
+        
+        feats = [
+            'latitude', 'longitude',
+            'propertyType', 'bedrooms', 'bathrooms', 'yearBuilt', 'lotSize'
+        ]
+        
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(
+            df[feats], df.price, test_size=0.2, random_state=42
+        )
+        
+        print(f"\nTraining set: {X_train.shape}")
+        print(f"Test set: {X_test.shape}")
+        
+        mlflow.log_param("test_size", 0.2)
+        mlflow.log_param("random_state", 42)
+        
+        # Create features
+        X_train = create_X(X_train)
+        X_test = create_X(X_test)
+        
+        # Hyperparameter tuning
+        best, best_rmse = tune_models(X_train, y_train, X_test, y_test)
+        
+        # Train final model
+        final_rmse = train_model(X_train, y_train, X_test, y_test, best, best_rmse)
+        
+        # Save run info to S3 (for Lambda to find latest model)
+        run_id = run.info.run_id
+        s3 = boto3.client('s3')
+        bucket = f"apartment-pipeline-mlflow-{environment}-{account_id}"
+        
+        run_info = {
+            'run_id': run_id,
+            'timestamp': datetime.now().isoformat(),
+            'rmse': float(final_rmse),
+            'environment': environment,
+            'mlflow_tracking_uri': MLFLOW_TRACKING_URI
+        }
+        
+        s3.put_object(
+            Bucket=bucket,
+            Key='models/latest_run.json',
+            Body=str(run_info).encode('utf-8')
+        )
+        
+        print("="*60)
+        print("✅ Training completed successfully!")
+        print(f"MLflow Run ID: {run_id}")
+        print(f"Final RMSE: {final_rmse:.2f}")
+        print(f"Model registered as: apartment-rental-predictor-{environment}")
+        print("="*60)
+        
+        return run_id
 
-    X_train, X_test, y_train, y_test = train_test_split(
-    df[feats], df.price, test_size=0.2, random_state=42
-)
-
-    X_train = create_X(X_train)
-    X_test = create_X(X_test)
-
-    best, _ = tune_models(X_train, y_train, X_test, y_test)
-
-    run_id = train_model(X_train, y_train, X_test, y_test, best)
-    print(f"MLflow run_id: {run_id}")
-    return run_id
 
 if __name__ == "__main__":
-    # import argparse
-
-    # parser = argparse.ArgumentParser(description='Train a model to predict taxi trip duration.')
-    # parser.add_argument('--year', type=int, required=True, help='Year of the data to train on')
-    # parser.add_argument('--month', type=int, required=True, help='Month of the data to train on')
-    # args = parser.parse_args()
-
-    # run_id = run(year=args.year, month=args.month)
     run_id = run()
-
-    with open("run_id.txt", "w") as f:
-        f.write(run_id)
-
-# def objective(params):
-#     with mlflow.start_run():
-
-#         mlflow.set_tag("developer", "mmichal")
-#         mlflow.set_tag("model", "xgboost")
-
-#         mlflow.log_params(params)
-
-#         booster = xgb.train(
-#             params=params,
-#             dtrain=train,
-#             num_boost_round=1000,
-#             evals=[(valid, "validation")],
-#             early_stopping_rounds = 50
-#         )
-
-#         y_pred = booster.predict(valid)
-#         rmse = root_mean_squared_error(y_test, y_pred)
-#         mlflow.log_metric("rmse", rmse)
-
-#     return {'loss': rmse, 'status': STATUS_OK}
-
-
-# search_space = {
-#     'max_depth': scope.int(hp.quniform('max_depth', 4, 100, 1)),
-#     'learning_rate': hp.loguniform('learning_rate', -3, 0), # exp(-3), exp(0) -> [0.05, 1]
-#     'reg_alpha': hp.loguniform('reg_alpha', -5, -1),
-#     'reg_lambda': hp.loguniform('reg_lambda', -6, -1),
-#     'min_child_weight': hp.loguniform('min_child_weight', -1, 3),
-#     'objective': 'reg:linear',
-#     'seed':42
-# }
-
-# best_result = fmin(
-#     fn=objective,
-#     space=search_space,
-#     algo=tpe.suggest,
-#     max_evals=500,
-#     trials=Trials()
-# )
-
-
-
-
-
-
-
-
-
-
+    print(f"\n✅ Pipeline completed! MLflow Run ID: {run_id}")
