@@ -14,20 +14,28 @@ def trigger_training():
     print(f"🚀 Initializing Manual Training Trigger...")
 
     try:
-        # 1. Discover Networking (Private Subnets)
-        subnets = ec2.describe_subnets(
-            Filters=[{'Name': 'tag:Name', 'Values': ['*private*']}]
-        )['Subnets']
-        subnet_ids = [s['SubnetId'] for s in subnets]
+        # 1. Discover Networking (Look for ANY subnets in the region first, then filter)
+        subnets_response = ec2.describe_subnets()
+        # Filter for subnets that are likely yours (e.g., have 'private' in the name or tags)
+        subnet_ids = [
+            s['SubnetId'] for s in subnets_response['Subnets'] 
+            if 'private' in str(s.get('Tags', [])).lower()
+        ]
         
-        # 2. Discover Security Group (Look for the MLflow ECS group)
-        sgs = ec2.describe_security_groups(
-            Filters=[{'Name': 'group-name', 'Values': ['*mlflow-ecs*', '*training*']}]
-        )['SecurityGroups']
-        sg_ids = [sg['GroupId'] for sg in sgs]
+        # 2. Discover Security Group
+        sg_response = ec2.describe_security_groups()
+        sg_ids = [
+            sg['GroupId'] for sg in sg_response['SecurityGroups']
+            if 'mlflow-ecs' in sg['GroupName'].lower() or 'training' in sg['GroupName'].lower()
+        ]
+
+        # DEBUG PRINT: Let's see what it found
+        print(f"DEBUG: Found Subnets: {subnet_ids}")
+        print(f"DEBUG: Found Security Groups: {sg_ids}")
 
         if not subnet_ids or not sg_ids:
-            print("❌ Error: Could not auto-discover Networking. Check AWS Auth/Region.")
+            print("❌ Error: Still could not auto-discover Networking.")
+            print("👉 Check the AWS Console: Do your subnets have 'private' in their Name tag?")
             return
 
         # 3. Start the Task
