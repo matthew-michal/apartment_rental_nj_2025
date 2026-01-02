@@ -3,6 +3,7 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 import os
+import json
 import boto3
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
@@ -121,7 +122,7 @@ def find_station(lat_long):
 def read_dataframe():
     import io
     
-    bucket = f"apartment-pipeline-training-{environment}-{account_id}"
+    bucket = os.getenv("MLFLOW_BUCKET_NAME", f"apartment-pipeline-mlflow-{environment}-{account_id}")
     print(f"Loading training data from s3://{bucket}/training/")
     
     s3 = boto3.client('s3')
