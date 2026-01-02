@@ -22,6 +22,12 @@ variable "ecr_repository_name" {
   type        = string
 }
 
+variable "image_tag" {
+  description = "Docker image tag to deploy"
+  type        = string
+  default     = "latest"
+}
+
 variable "mlflow_db_instance_class" {
   description = "RDS instance class for MLflow database"
   type        = string
