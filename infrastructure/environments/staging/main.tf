@@ -104,6 +104,17 @@ resource "aws_secretsmanager_secret" "api_keys" {
   }
 }
 
+# SQS Dead Letter Queue for Lambda
+resource "aws_sqs_queue" "dlq" {
+  name                      = "apartment-pipeline-dlq-${var.environment}"
+  message_retention_seconds = 1209600 # 14 days
+
+  tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
 # SIMPLIFIED: Deploy MLflow + RDS together without circular dependency
 # Strategy: RDS security group allows all traffic from VPC CIDR (simple but works)
 
@@ -203,6 +214,7 @@ module "lambda_daily" {
   training_bucket_name = module.training_bucket.bucket_name
   training_bucket_arn  = module.training_bucket.bucket_arn
   secrets_arn          = aws_secretsmanager_secret.api_keys.arn
+  dlq_arn              = aws_sqs_queue.dlq.arn
 }
 
 # EventBridge Rule for Daily Predictions
