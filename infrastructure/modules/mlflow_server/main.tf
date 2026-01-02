@@ -248,7 +248,7 @@ resource "aws_ecs_task_definition" "mlflow" {
     command = [
       "mlflow",
       "server",
-      "--backend-store-uri", "postgresql://${var.db_username}:${var.db_password}@${var.db_endpoint}/${var.db_name}",
+      "--backend-store-uri", "postgresql://${var.db_username}:${urlencode(var.db_password)}@${var.db_endpoint}/${var.db_name}",
       "--default-artifact-root", "s3://${var.mlflow_bucket_name}/mlflow",
       "--host", "0.0.0.0",
       "--port", "5000"
