@@ -35,12 +35,20 @@ data "aws_vpc" "main" {
   id = var.vpc_id
 }
 
-# Get all subnets in the VPC (default VPC subnets)
-data "aws_subnets" "private" {
+# 1. Get ALL subnets first
+data "aws_subnets" "all" {
   filter {
     name   = "vpc-id"
     values = [var.vpc_id]
   }
+}
+
+# 2. Identify Public vs Private
+# NOTE: In a Default VPC, 'map_public_ip_on_launch' is usually true for all.
+# If you haven't manually created private subnets, use 'all' for both to avoid errors.
+locals {
+  public_subnet_ids  = data.aws_subnets.all.ids
+  private_subnet_ids = data.aws_subnets.all.ids 
 }
 
 # ECR Repository (already exists)
@@ -124,7 +132,7 @@ module "mlflow_db" {
   environment           = var.environment
   vpc_id                = var.vpc_id
   vpc_cidr              = data.aws_vpc.main.cidr_block
-  private_subnet_ids    = data.aws_subnets.private.ids
+  private_subnet_ids    = local.private_subnet_ids
   ecs_security_group_id = null # Will allow VPC CIDR in module
   db_instance_class     = var.mlflow_db_instance_class
 }
@@ -147,7 +155,7 @@ module "mlflow_server" {
   region             = var.aws_region
   vpc_id             = var.vpc_id
   vpc_cidr           = data.aws_vpc.main.cidr_block
-  private_subnet_ids = data.aws_subnets.private.ids
+  private_subnet_ids = local.public_subnet_ids
 
   mlflow_bucket_name = module.mlflow_bucket.bucket_name
   mlflow_bucket_arn  = module.mlflow_bucket.bucket_arn
@@ -171,7 +179,7 @@ module "training_task" {
   environment                  = var.environment
   region                       = var.aws_region
   ecs_cluster_arn              = module.mlflow_server.ecs_cluster_arn
-  private_subnet_ids           = data.aws_subnets.private.ids
+  private_subnet_ids           = local.public_subnet_ids
   mlflow_ecs_security_group_id = module.mlflow_server.ecs_security_group_id
 
   # ecr_image_uri       = "${data.aws_ecr_repository.app.repository_url}:latest" # old uri with errors
@@ -185,6 +193,8 @@ module "training_task" {
   cpu                 = var.training_cpu
   memory              = var.training_memory
   schedule_expression = var.training_schedule
+
+  aws_sts_regional_endpoints = "regional"
 
   depends_on = [module.mlflow_server]
 }
@@ -278,7 +288,7 @@ resource "aws_vpc_endpoint" "ecr_api" {
   service_name        = "com.amazonaws.${var.aws_region}.ecr.api"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
-  subnet_ids          = data.aws_subnets.private.ids
+  subnet_ids          = local.private_subnet_ids
   security_group_ids  = [aws_security_group.vpc_endpoints.id]
 }
 
@@ -288,7 +298,7 @@ resource "aws_vpc_endpoint" "ecr_dkr" {
   service_name        = "com.amazonaws.${var.aws_region}.ecr.dkr"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
-  subnet_ids          = data.aws_subnets.private.ids
+  subnet_ids          = local.private_subnet_ids
   security_group_ids  = [aws_security_group.vpc_endpoints.id]
 }
 
@@ -298,7 +308,7 @@ resource "aws_vpc_endpoint" "secrets" {
   service_name        = "com.amazonaws.${var.aws_region}.secretsmanager"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
-  subnet_ids          = data.aws_subnets.private.ids
+  subnet_ids          = local.private_subnet_ids
   security_group_ids  = [aws_security_group.vpc_endpoints.id]
 }
 
@@ -317,11 +327,26 @@ resource "aws_vpc_endpoint" "logs" {
   service_name        = "com.amazonaws.${var.aws_region}.logs"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
-  subnet_ids          = data.aws_subnets.private.ids
+  subnet_ids          = local.private_subnet_ids
   security_group_ids  = [aws_security_group.vpc_endpoints.id]
 
   tags = {
     Environment = var.environment
     Name        = "staging-logs-endpoint"
+  }
+}
+
+# 7. STS Endpoint (Interface) - To get account/identity info
+resource "aws_vpc_endpoint" "sts" {
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.sts"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = local.private_subnet_ids
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+
+  tags = {
+    Environment = var.environment
+    Name        = "staging-sts-endpoint"
   }
 }

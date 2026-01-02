@@ -67,3 +67,9 @@ variable "schedule_expression" {
   type        = string
   default     = "cron(0 15 ? * SUN *)" # 10 AM EST = 15:00 UTC on Sundays
 }
+
+variable "aws_sts_regional_endpoints" {
+  description = "The type of STS regional endpoint to use. Use 'regional' to avoid global STS timeouts."
+  type        = string
+  default     = "regional" # Provides a safe default
+}

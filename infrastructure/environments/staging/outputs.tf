@@ -50,3 +50,13 @@ output "ecr_repository_url" {
   description = "URL of the ECR repository"
   value       = data.aws_ecr_repository.app.repository_url
 }
+
+output "training_lambda_function_name" {
+  # If you don't have a weekly lambda, you can point this to the ECS Task name 
+  # or a dummy value so the GHA script doesn't crash.
+  value = "apartment-pipeline-training-task" 
+}
+
+output "mlflow_url" {
+  value = "http://${module.mlflow_server.alb_dns_name}"
+}

@@ -133,6 +133,10 @@ resource "aws_ecs_task_definition" "training" {
 
     environment = [
       {
+        name  = "AWS_STS_REGIONAL_ENDPOINTS"
+        value = var.aws_sts_regional_endpoints
+      },
+      {
         name  = "ENVIRONMENT"
         value = var.environment
       },

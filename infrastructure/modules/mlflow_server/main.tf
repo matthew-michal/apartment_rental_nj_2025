@@ -41,6 +41,14 @@ resource "aws_security_group" "mlflow_ecs" {
     security_groups = [aws_security_group.mlflow_alb.id]
   }
 
+  ingress {
+    description = "MLflow HTTP from VPC (Internal Tasks)"
+    from_port   = 5000
+    to_port     = 5000
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr] 
+  }
+
   egress {
     description = "Allow all outbound"
     from_port   = 0
@@ -63,11 +71,11 @@ resource "aws_security_group" "mlflow_alb" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description = "HTTP from anywhere (internal VPC)"
+    description = "HTTP from the Internet"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
+    cidr_blocks = ["0.0.0.0/0"] # Change from [var.vpc_cidr] to allow your home IP
   }
 
   egress {
@@ -87,7 +95,7 @@ resource "aws_security_group" "mlflow_alb" {
 
 resource "aws_lb" "mlflow" {
   name               = "${var.environment}-mlflow-alb"
-  internal           = true
+  internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.mlflow_alb.id]
   subnets            = var.private_subnet_ids
