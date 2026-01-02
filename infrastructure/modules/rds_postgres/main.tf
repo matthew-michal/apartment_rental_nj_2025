@@ -16,12 +16,27 @@ resource "aws_security_group" "mlflow_db" {
   description = "Security group for MLflow RDS Postgres"
   vpc_id      = var.vpc_id
 
-  ingress {
-    description     = "PostgreSQL from ECS tasks"
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [var.ecs_security_group_id]
+  # Allow PostgreSQL from ECS tasks OR entire VPC
+  dynamic "ingress" {
+    for_each = var.ecs_security_group_id != null ? [1] : []
+    content {
+      description     = "PostgreSQL from ECS tasks"
+      from_port       = 5432
+      to_port         = 5432
+      protocol        = "tcp"
+      security_groups = [var.ecs_security_group_id]
+    }
+  }
+
+  dynamic "ingress" {
+    for_each = var.ecs_security_group_id == null ? [1] : []
+    content {
+      description = "PostgreSQL from VPC"
+      from_port   = 5432
+      to_port     = 5432
+      protocol    = "tcp"
+      cidr_blocks = [var.vpc_cidr]
+    }
   }
 
   egress {

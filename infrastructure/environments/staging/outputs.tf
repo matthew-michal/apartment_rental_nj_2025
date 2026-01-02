@@ -1,3 +1,5 @@
+# infrastructure/environments/staging/outputs.tf
+
 output "mlflow_bucket_name" {
   description = "Name of the MLflow artifacts bucket"
   value       = module.mlflow_bucket.bucket_name
@@ -14,13 +16,28 @@ output "predictions_bucket_name" {
 }
 
 output "daily_lambda_function_name" {
-  description = "Name of the daily run Lambda function"
+  description = "Name of the daily predictions Lambda function"
   value       = module.lambda_daily.function_name
 }
 
-output "training_lambda_function_name" {
-  description = "Name of the training Lambda function"
-  value       = module.lambda_weekly.function_name
+output "mlflow_tracking_uri" {
+  description = "MLflow tracking server URI"
+  value       = module.mlflow_server.mlflow_tracking_uri
+}
+
+output "mlflow_db_endpoint" {
+  description = "RDS endpoint for MLflow database"
+  value       = module.mlflow_db.db_endpoint
+}
+
+output "ecs_cluster_name" {
+  description = "Name of the ECS cluster"
+  value       = module.mlflow_server.ecs_cluster_name
+}
+
+output "training_task_definition_arn" {
+  description = "ARN of the training task definition"
+  value       = module.training_task.task_definition_arn
 }
 
 output "secret_arn" {
@@ -29,12 +46,7 @@ output "secret_arn" {
   sensitive   = true
 }
 
-output "sns_topic_arn" {
-  description = "ARN of the SNS topic for alerts"
-  value       = aws_sns_topic.alerts.arn
-}
-
 output "ecr_repository_url" {
   description = "URL of the ECR repository"
-  value       = aws_ecr_repository.app.repository_url
+  value       = data.aws_ecr_repository.app.repository_url
 }

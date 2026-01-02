@@ -10,14 +10,21 @@ variable "vpc_id" {
   type        = string
 }
 
+variable "vpc_cidr" {
+  description = "VPC CIDR block (used if ecs_security_group_id is null)"
+  type        = string
+  default     = null
+}
+
 variable "private_subnet_ids" {
   description = "List of private subnet IDs for RDS subnet group"
   type        = list(string)
 }
 
 variable "ecs_security_group_id" {
-  description = "Security group ID of ECS tasks that need access"
+  description = "Security group ID of ECS tasks that need access (nullable)"
   type        = string
+  default     = null
 }
 
 variable "db_instance_class" {

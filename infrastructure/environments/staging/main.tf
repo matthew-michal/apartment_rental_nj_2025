@@ -35,14 +35,11 @@ data "aws_vpc" "main" {
   id = var.vpc_id
 }
 
+# Get all subnets in the VPC (default VPC subnets)
 data "aws_subnets" "private" {
   filter {
     name   = "vpc-id"
     values = [var.vpc_id]
-  }
-
-  tags = {
-    Tier = "Private"
   }
 }
 
@@ -55,37 +52,39 @@ data "aws_ecr_repository" "app" {
 module "mlflow_bucket" {
   source = "../../modules/s3"
 
-  bucket_name = "apartment-pipeline-mlflow-${var.environment}-${data.aws_caller_identity.current.account_id}"
-  environment = var.environment
+  project_name = "apartment-pipeline"
+  bucket_name  = "apartment-pipeline-mlflow-${var.environment}-${data.aws_caller_identity.current.account_id}"
+  environment  = var.environment
 
   enable_versioning = true
   lifecycle_rules = [{
-    id                                 = "cleanup-old-experiments"
-    enabled                            = true
-    expiration_days                    = 90
-    noncurrent_version_expiration_days = 30
+    id              = "cleanup-old-experiments"
+    enabled         = true
+    expiration_days = 90
   }]
 }
 
 module "training_bucket" {
   source = "../../modules/s3"
 
-  bucket_name = "apartment-pipeline-training-${var.environment}-${data.aws_caller_identity.current.account_id}"
-  environment = var.environment
+  project_name = "apartment-pipeline"
+  bucket_name  = "apartment-pipeline-training-${var.environment}-${data.aws_caller_identity.current.account_id}"
+  environment  = var.environment
 
   enable_versioning = true
   lifecycle_rules = [{
-    id                                 = "keep-latest-only"
-    enabled                            = true
-    noncurrent_version_expiration_days = 7
+    id              = "cleanup-old-training-data"
+    enabled         = true
+    expiration_days = 365 # Keep training data for 1 year
   }]
 }
 
 module "predictions_bucket" {
   source = "../../modules/s3"
 
-  bucket_name = "apartment-pipeline-predictions-${var.environment}-${data.aws_caller_identity.current.account_id}"
-  environment = var.environment
+  project_name = "apartment-pipeline"
+  bucket_name  = "apartment-pipeline-predictions-${var.environment}-${data.aws_caller_identity.current.account_id}"
+  environment  = var.environment
 
   enable_versioning = false
   lifecycle_rules = [{
@@ -105,15 +104,28 @@ resource "aws_secretsmanager_secret" "api_keys" {
   }
 }
 
-# RDS Postgres for MLflow
+# SIMPLIFIED: Deploy MLflow + RDS together without circular dependency
+# Strategy: RDS security group allows all traffic from VPC CIDR (simple but works)
+
 module "mlflow_db" {
   source = "../../modules/rds_postgres"
 
   environment           = var.environment
   vpc_id                = var.vpc_id
+  vpc_cidr              = data.aws_vpc.main.cidr_block
   private_subnet_ids    = data.aws_subnets.private.ids
-  ecs_security_group_id = module.mlflow_server.ecs_security_group_id
+  ecs_security_group_id = null # Will allow VPC CIDR in module
   db_instance_class     = var.mlflow_db_instance_class
+}
+
+# Read DB password from Secrets Manager
+data "aws_secretsmanager_secret_version" "mlflow_db_password" {
+  secret_id  = module.mlflow_db.db_password_secret_arn
+  depends_on = [module.mlflow_db]
+}
+
+locals {
+  db_credentials = jsondecode(data.aws_secretsmanager_secret_version.mlflow_db_password.secret_string)
 }
 
 # MLflow Tracking Server (ECS Fargate)
@@ -131,8 +143,8 @@ module "mlflow_server" {
 
   db_endpoint            = module.mlflow_db.db_endpoint
   db_name                = module.mlflow_db.db_name
-  db_username            = module.mlflow_db.db_username
-  db_password            = module.mlflow_db.db_password_secret_arn # Will be read from Secrets Manager
+  db_username            = local.db_credentials.username
+  db_password            = local.db_credentials.password
   db_password_secret_arn = module.mlflow_db.db_password_secret_arn
 
   cpu    = var.mlflow_server_cpu
@@ -165,14 +177,14 @@ module "training_task" {
   depends_on = [module.mlflow_server]
 }
 
-# Lambda for Daily Predictions (already exists - update to use MLflow)
+# Lambda for Daily Predictions
 module "lambda_daily" {
   source = "../../modules/lambda"
 
   function_name = "apartment-pipeline-daily-predictions-${var.environment}"
   environment   = var.environment
 
-  ecr_image_uri = "${data.aws_ecr_repository.app.repository_url}:latest"
+  image_uri = "${data.aws_ecr_repository.app.repository_url}:latest"
 
   memory_size = var.daily_lambda_memory
   timeout     = var.daily_lambda_timeout
@@ -185,13 +197,12 @@ module "lambda_daily" {
     PREDICTIONS_BUCKET  = module.predictions_bucket.bucket_name
   }
 
-  s3_bucket_arns = [
-    module.mlflow_bucket.bucket_arn,
-    module.training_bucket.bucket_arn,
-    module.predictions_bucket.bucket_arn
-  ]
-
-  secrets_manager_arn = aws_secretsmanager_secret.api_keys.arn
+  # Lambda module required variables
+  mlflow_bucket_name   = module.mlflow_bucket.bucket_name
+  mlflow_bucket_arn    = module.mlflow_bucket.bucket_arn
+  training_bucket_name = module.training_bucket.bucket_name
+  training_bucket_arn  = module.training_bucket.bucket_arn
+  secrets_arn          = aws_secretsmanager_secret.api_keys.arn
 }
 
 # EventBridge Rule for Daily Predictions
