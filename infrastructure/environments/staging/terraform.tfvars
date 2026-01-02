@@ -6,7 +6,7 @@ aws_region  = "us-east-1"
 vpc_id = "vpc-001b53d0ecdac6d3c"
 
 # ECR
-ecr_repository_name = "apartment-pipeline"
+ecr_repository_name = "apartment-pipeline-staging"
 
 # MLflow Database
 mlflow_db_instance_class = "db.t3.micro"
