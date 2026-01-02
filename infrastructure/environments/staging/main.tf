@@ -249,3 +249,64 @@ resource "aws_lambda_permission" "allow_eventbridge_daily" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.daily_predictions.arn
 }
+
+# --- VPC Endpoints for Private Connectivity ---
+
+# 1. Security Group for the Interface Endpoints
+resource "aws_security_group" "vpc_endpoints" {
+  name        = "staging-vpc-endpoints-sg"
+  description = "Allow ECS tasks to reach ECR and Secrets Manager"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    # Allow traffic from your ECS Training Task security group
+    cidr_blocks = [data.aws_vpc.main.cidr_block]
+  }
+
+  tags = {
+    Environment = var.environment
+    Name        = "staging-vpc-endpoints-sg"
+  }
+}
+
+# 2. ECR API (Interface) - For service authentication
+resource "aws_vpc_endpoint" "ecr_api" {
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.ecr.api"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = data.aws_subnets.private.ids
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+}
+
+# 3. ECR DKR (Interface) - For pulling image layers
+resource "aws_vpc_endpoint" "ecr_dkr" {
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.ecr.dkr"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = data.aws_subnets.private.ids
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+}
+
+# 4. Secrets Manager (Interface) - For API keys
+resource "aws_vpc_endpoint" "secrets" {
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.secretsmanager"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = data.aws_subnets.private.ids
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+}
+
+# 5. S3 (Gateway) - Required by ECR and your training script
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = var.vpc_id
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
+  vpc_endpoint_type = "Gateway"
+  # Using the Route Table ID you just found
+  route_table_ids   = ["rtb-0f853af5706493d77"] 
+}

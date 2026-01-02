@@ -2,52 +2,33 @@ import boto3
 import time
 import sys
 
-# Constants matching your Terraform logs
+# Constants matching your verified infrastructure
 CLUSTER_NAME = "staging-mlflow-cluster"
 TASK_DEFINITION = "staging-training" 
 REGION = "us-east-1"
 
+# Hardcoded from your AWS Console screenshot and debug logs
+# Using the first two subnets from your list for high availability
+SUBNET_IDS = ["subnet-0419d763ef9fa2b24", "subnet-08e8b15f8ec14faf6"] 
+SECURITY_GROUP_IDS = ["sg-051ba8280cc33ca3f"] 
+
 def trigger_training():
     ecs = boto3.client('ecs', region_name=REGION)
-    ec2 = boto3.client('ec2', region_name=REGION)
 
     print(f"🚀 Initializing Manual Training Trigger...")
+    print(f"📡 Target Cluster: {CLUSTER_NAME}")
+    print(f"📡 Task Definition: {TASK_DEFINITION}")
 
     try:
-        # 1. Discover Networking (Look for ANY subnets in the region first, then filter)
-        subnets_response = ec2.describe_subnets()
-        # Filter for subnets that are likely yours (e.g., have 'private' in the name or tags)
-        subnet_ids = [
-            s['SubnetId'] for s in subnets_response['Subnets'] 
-            if 'private' in str(s.get('Tags', [])).lower()
-        ]
-        
-        # 2. Discover Security Group
-        sg_response = ec2.describe_security_groups()
-        sg_ids = [
-            sg['GroupId'] for sg in sg_response['SecurityGroups']
-            if 'mlflow-ecs' in sg['GroupName'].lower() or 'training' in sg['GroupName'].lower()
-        ]
-
-        # DEBUG PRINT: Let's see what it found
-        print(f"DEBUG: Found Subnets: {subnet_ids}")
-        print(f"DEBUG: Found Security Groups: {sg_ids}")
-
-        if not subnet_ids or not sg_ids:
-            print("❌ Error: Still could not auto-discover Networking.")
-            print("👉 Check the AWS Console: Do your subnets have 'private' in their Name tag?")
-            return
-
-        # 3. Start the Task
-        print(f"📡 Starting Task '{TASK_DEFINITION}' on Cluster '{CLUSTER_NAME}'...")
+        # Start the Task
         run_response = ecs.run_task(
             cluster=CLUSTER_NAME,
             taskDefinition=TASK_DEFINITION,
             launchType='FARGATE',
             networkConfiguration={
                 'awsvpcConfiguration': {
-                    'subnets': subnet_ids,
-                    'securityGroups': sg_ids,
+                    'subnets': SUBNET_IDS,
+                    'securityGroups': SECURITY_GROUP_IDS,
                     'assignPublicIp': 'DISABLED'
                 }
             }
@@ -60,10 +41,10 @@ def trigger_training():
         task_arn = run_response['tasks'][0]['taskArn']
         task_id = task_arn.split('/')[-1]
         print(f"✅ Task started! ID: {task_id}")
-        print(f"🔗 Monitor in Console: https://{REGION}.console.aws.amazon.com/ecs/v2/clusters/{CLUSTER_NAME}/tasks/{task_id}")
+        print(f"🔗 Monitor: https://{REGION}.console.aws.amazon.com/ecs/v2/clusters/{CLUSTER_NAME}/tasks/{task_id}")
         
-        # 4. The Waiter Logic
-        print("\n⏳ Waiting for training to complete (this may take several minutes)...")
+        # The Waiter Logic
+        print("\n⏳ Monitoring training progress...")
         last_status = None
         
         while True:
@@ -72,25 +53,22 @@ def trigger_training():
             current_status = task['lastStatus']
             
             if current_status != last_status:
-                print(f"   🔹 Status update: {current_status}")
+                print(f"   🔹 Status: {current_status}")
                 last_status = current_status
             
             if current_status == 'STOPPED':
-                # Check exit code to see if it actually worked
                 exit_code = task['containers'][0].get('ExitCode', 'Unknown')
-                reason = task.get('stoppedReason', 'No reason provided')
-                
                 if exit_code == 0:
-                    print(f"\n✨ SUCCESS: Training completed with Exit Code 0.")
+                    print(f"\n✨ SUCCESS: Training completed (Exit 0).")
                 else:
                     print(f"\n💥 FAILED: Task stopped with Exit Code {exit_code}.")
-                    print(f"   Reason: {reason}")
+                    print(f"   Reason: {task.get('stoppedReason', 'Unknown')}")
                 break
                 
-            time.sleep(15) # Poll every 15 seconds
+            time.sleep(15)
 
     except Exception as e:
-        print(f"❌ Unexpected Error: {e}")
+        print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
     trigger_training()
