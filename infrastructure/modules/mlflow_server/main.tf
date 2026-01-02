@@ -245,13 +245,13 @@ resource "aws_ecs_task_definition" "mlflow" {
     name  = "mlflow"
     image = "ghcr.io/mlflow/mlflow:v2.9.2"
 
+    # 1. We switch to shell form so we can run multiple commands
+    entryPoint = ["sh", "-c"]
+
+    # 2. Install the driver, then start the server
+    # Note: We use postgresql+psycopg2 to be explicit
     command = [
-      "mlflow",
-      "server",
-      "--backend-store-uri", "postgresql+psycopg2://${var.db_username}:${urlencode(var.db_password)}@${var.db_endpoint}/${var.db_name}",
-      "--default-artifact-root", "s3://${var.mlflow_bucket_name}/mlflow",
-      "--host", "0.0.0.0",
-      "--port", "5000"
+      "pip install psycopg2-binary==2.9.9 && mlflow server --backend-store-uri postgresql+psycopg2://${var.db_username}:${urlencode(var.db_password)}@${var.db_endpoint}/${var.db_name} --default-artifact-root s3://${var.mlflow_bucket_name}/mlflow --host 0.0.0.0 --port 5000"
     ]
 
     portMappings = [{
@@ -276,11 +276,12 @@ resource "aws_ecs_task_definition" "mlflow" {
     }
 
     healthCheck = {
+      # Use the internal port 5000 for the health check
       command     = ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
       interval    = 30
       timeout     = 5
       retries     = 3
-      startPeriod = 60
+      startPeriod = 90 # Increased to give pip install enough time to finish
     }
   }])
 
