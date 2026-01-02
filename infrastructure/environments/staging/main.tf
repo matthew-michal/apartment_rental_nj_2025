@@ -43,12 +43,21 @@ data "aws_subnets" "all" {
   }
 }
 
-# 2. Identify Public vs Private
-# NOTE: In a Default VPC, 'map_public_ip_on_launch' is usually true for all.
-# If you haven't manually created private subnets, use 'all' for both to avoid errors.
+# 1. Get detailed data for the subnets we found
+data "aws_subnet" "details" {
+  for_each = toset(data.aws_subnets.all.ids)
+  id       = each.value
+}
+
 locals {
-  public_subnet_ids  = data.aws_subnets.all.ids
-  private_subnet_ids = data.aws_subnets.all.ids 
+  # Dynamically pick subnets that have "map_public_ip_on_launch" enabled
+  public_subnet_ids = [
+    for s in data.aws_subnet.details : s.id if s.map_public_ip_on_launch == true
+  ]
+  
+  # For a Default VPC, usually all are public, so we can use them all 
+  # or just the filtered ones for both to ensure the ALB is happy.
+  private_subnet_ids = data.aws_subnets.all.ids
 }
 
 # ECR Repository (already exists)
@@ -156,6 +165,7 @@ module "mlflow_server" {
   vpc_id             = var.vpc_id
   vpc_cidr           = data.aws_vpc.main.cidr_block
   private_subnet_ids = local.public_subnet_ids
+  public_subnet_ids  = local.public_subnet_ids
 
   mlflow_bucket_name = module.mlflow_bucket.bucket_name
   mlflow_bucket_arn  = module.mlflow_bucket.bucket_arn

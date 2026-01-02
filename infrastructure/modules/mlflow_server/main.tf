@@ -98,7 +98,7 @@ resource "aws_lb" "mlflow" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.mlflow_alb.id]
-  subnets            = var.private_subnet_ids
+  subnets            = var.public_subnet_ids
 
   tags = {
     Name        = "${var.environment}-mlflow-alb"
