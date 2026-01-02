@@ -310,3 +310,18 @@ resource "aws_vpc_endpoint" "s3" {
   # Using the Route Table ID you just found
   route_table_ids   = ["rtb-0f853af5706493d77"] 
 }
+
+# 6. CloudWatch Logs Endpoint (Interface) - For task logging
+resource "aws_vpc_endpoint" "logs" {
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.logs"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = true
+  subnet_ids          = data.aws_subnets.private.ids
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+
+  tags = {
+    Environment = var.environment
+    Name        = "staging-logs-endpoint"
+  }
+}
