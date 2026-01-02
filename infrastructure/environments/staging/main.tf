@@ -174,7 +174,8 @@ module "training_task" {
   private_subnet_ids           = data.aws_subnets.private.ids
   mlflow_ecs_security_group_id = module.mlflow_server.ecs_security_group_id
 
-  ecr_image_uri       = "${data.aws_ecr_repository.app.repository_url}:latest"
+  # ecr_image_uri       = "${data.aws_ecr_repository.app.repository_url}:latest" # old uri with errors
+  ecr_image_uri = var.image_uri
   mlflow_tracking_uri = module.mlflow_server.mlflow_tracking_uri
 
   training_bucket_arn = module.training_bucket.bucket_arn
@@ -195,7 +196,8 @@ module "lambda_daily" {
   function_name = "apartment-pipeline-daily-predictions-${var.environment}"
   environment   = var.environment
 
-  image_uri = "${data.aws_ecr_repository.app.repository_url}:latest"
+  # image_uri = "${data.aws_ecr_repository.app.repository_url}:latest" #old uri with errors
+  image_uri     = var.image_uri
 
   memory_size = var.daily_lambda_memory
   timeout     = var.daily_lambda_timeout

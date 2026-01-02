@@ -92,6 +92,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        
+      - name: Wait for ECR propagation
+        run: sleep 30  # Standard wait time for ECR manifest indexing
       
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -117,7 +120,12 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: |
+          # Construct the full URI using the ECR registry output from the previous login step
+          # This ensures Terraform looks for the exact image pushed in Job 1
+          FULL_IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:staging-${{ github.run_number }}"
+          
           terraform plan \
+            -var="image_uri=$FULL_IMAGE_URI" \
             -var="image_tag=staging-${{ github.run_number }}" \
             -var="environment=staging" \
             -out=tfplan
@@ -150,57 +158,6 @@ jobs:
     outputs:
       lambda_daily: ${{ steps.tf-output.outputs.lambda_daily }}
       lambda_weekly: ${{ steps.tf-output.outputs.lambda_weekly }}
-  
-  # Job 3: Update Lambda Functions
-  update-lambda:
-    needs: [build-and-push, deploy-infrastructure]
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-      
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-      
-      - name: Update Daily Lambda
-        run: |
-          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:staging-${{ github.run_number }}"
-          
-          echo "Updating Lambda: ${{ needs.deploy-infrastructure.outputs.lambda_daily }}"
-          echo "With image: $IMAGE_URI"
-          
-          aws lambda update-function-code \
-            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_daily }} \
-            --image-uri $IMAGE_URI
-          
-          # Wait for update to complete
-          aws lambda wait function-updated \
-            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_daily }}
-          
-          echo "✅ Daily Lambda updated successfully"
-      
-      - name: Update Weekly Lambda
-        run: |
-          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:staging-${{ github.run_number }}"
-    
-          echo "Updating Lambda: ${{ needs.deploy-infrastructure.outputs.lambda_weekly }}"
-          echo "With image: $IMAGE_URI"
-          
-          aws lambda update-function-code \
-            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_weekly }} \
-            --image-uri $IMAGE_URI
-          
-          # Wait for update to complete
-          aws lambda wait function-updated \
-            --function-name ${{ needs.deploy-infrastructure.outputs.lambda_weekly }}
-          
-          echo "✅ Weekly Lambda updated successfully"
   
   # Job 4: Run Integration Tests
   integration-tests:

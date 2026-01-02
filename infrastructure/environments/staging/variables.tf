@@ -75,3 +75,8 @@ variable "daily_lambda_timeout" {
   type        = number
   default     = 300
 }
+
+variable "image_uri" {
+  description = "Full ECR image URI provided by GitHub Actions"
+  type        = string
+}
