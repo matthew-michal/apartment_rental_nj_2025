@@ -50,8 +50,8 @@ jobs:
         with:
           images: ${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging
           tags: |
+            type=raw,value=latest
             type=sha,prefix=staging-
-            type=raw,value=staging-latest
             type=raw,value=staging-${{ github.run_number }}
       
       - name: Build and push Docker image
@@ -110,11 +110,10 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: |
-          FULL_IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:staging-${{ github.run_number }}"
+          FULL_IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/apartment-pipeline-staging:latest"
           
           terraform plan \
             -var="image_uri=$FULL_IMAGE_URI" \
-            -var="image_tag=staging-${{ github.run_number }}" \
             -var="environment=staging" \
             -out=tfplan
       
