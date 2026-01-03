@@ -68,40 +68,46 @@ def load_model():
     try:
         logger.info("Loading model from MLflow...")
         
-        # Get AWS account ID for S3-based MLflow
-        sts = boto3.client('sts')
-        account_id = sts.get_caller_identity()['Account']
-        environment = os.environ.get('ENVIRONMENT', 'staging')
-
-        # Set S3-based MLflow tracking (no EC2 server needed)
-        mlflow_bucket = f"apartment-pipeline-mlflow-{environment}-{account_id}"
-        mlflow.set_tracking_uri(f"s3://{mlflow_bucket}/mlflow")
-        
-        # Get the latest run ID from S3
-        try:
-            run_id_obj = s3_client.get_object(
-                Bucket=config.mlflow_bucket,
-                Key='models/run_id.txt'
-            )
-            run_id = run_id_obj['Body'].read().decode('utf-8').strip()
-            logger.info(f"Using model from run_id: {run_id}")
-        except Exception as e:
-            logger.warning(f"Could not load run_id from S3: {e}")
-            # Try to use the production model alias
-            run_id = None
-        
-        # Load model
-        if run_id:
-            model_uri = f"runs:/{run_id}/pipeline_model"
-            model = mlflow.sklearn.load_model(model_uri)
-            logger.info(f"✅ Model loaded successfully from run {run_id}")
+        # Get MLflow tracking URI from environment (set by Terraform)
+        mlflow_tracking_uri = os.environ.get('MLFLOW_TRACKING_URI')
+        if mlflow_tracking_uri:
+            logger.info(f"Using MLflow tracking URI: {mlflow_tracking_uri}")
+            mlflow.set_tracking_uri(mlflow_tracking_uri)
         else:
-            # Fallback: load latest version of registered model
-            model_uri = "models:/apartment-rent-pipeline/Production"
-            model = mlflow.sklearn.load_model(model_uri)
-            logger.info("✅ Model loaded from production registry")
+            logger.warning("MLFLOW_TRACKING_URI not set, using default")
         
-        return model, run_id
+        # Option 1: Try to load from latest_run.json in S3
+        try:
+            mlflow_bucket = os.environ.get('MLFLOW_BUCKET')
+            
+            if mlflow_bucket:
+                run_info_obj = s3_client.get_object(
+                    Bucket=mlflow_bucket,
+                    Key='models/latest_run.json'
+                )
+                run_info = json.loads(run_info_obj['Body'].read().decode('utf-8'))
+                run_id = run_info['run_id']
+                logger.info(f"Using model from run_id: {run_id}")
+                
+                # Load model using MLflow pyfunc (works with both S3 and server)
+                model_uri = f"runs:/{run_id}/model"
+                model = mlflow.pyfunc.load_model(model_uri)
+                logger.info(f"✅ Model loaded successfully from run {run_id}")
+                return model, run_id
+        except Exception as e:
+            logger.warning(f"Could not load from latest_run.json: {e}")
+        
+        # Option 2: Load from registered model
+        try:
+            environment = os.environ.get('ENVIRONMENT', 'staging')
+            model_name = f"apartment-rental-predictor-{environment}"
+            model_uri = f"models:/{model_name}/latest"
+            model = mlflow.pyfunc.load_model(model_uri)
+            logger.info(f"✅ Model loaded from registered model: {model_name}")
+            return model, model_name
+        except Exception as e:
+            logger.error(f"Failed to load from registered model: {e}")
+            raise Exception("Could not load model from MLflow - no valid model found")
         
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
