@@ -35,63 +35,32 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 # Custom policy for S3, SES, Secrets Manager access
 resource "aws_iam_policy" "lambda_custom_policy" {
   name        = "${var.function_name}-policy"
-  description = "Custom policy for ${var.function_name}"
-
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # S3 Access for MLflow artifacts and training data
       {
         Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket",
-          "s3:DeleteObject"
-        ]
-        Resource = [
-          "${var.mlflow_bucket_arn}/*",
-          var.mlflow_bucket_arn,
-          "${var.training_bucket_arn}/*",
-          var.training_bucket_arn
-        ]
+        Action = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"]
+        Resource = ["${var.mlflow_bucket_arn}/*", var.mlflow_bucket_arn, "${var.training_bucket_arn}/*", var.training_bucket_arn]
       },
-      # SES for sending email alerts
       {
         Effect = "Allow"
-        Action = [
-          "ses:SendEmail",
-          "ses:SendRawEmail"
-        ]
+        Action = ["ses:SendEmail", "ses:SendRawEmail"]
         Resource = "*"
       },
-      # Secrets Manager for API keys
       {
         Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue"
-        ]
+        Action = ["secretsmanager:GetSecretValue"]
         Resource = var.secrets_arn
       },
-      # CloudWatch for custom metrics
       {
         Effect = "Allow"
-        Action = [
-          "cloudwatch:PutMetricData"
-        ]
-        Resource = "*"
-        Condition = {
-          StringEquals = {
-            "cloudwatch:namespace" = "ApartmentPipeline"
-          }
-        }
+        Action = ["cloudwatch:PutMetricData"]
+        Resource = "*" # Fixed: Removed the Namespace Condition
       },
-      # SQS for dead letter queue
       {
         Effect = "Allow"
-        Action = [
-          "sqs:SendMessage"
-        ]
+        Action = ["sqs:SendMessage"]
         Resource = var.dlq_arn
       }
     ]
@@ -260,5 +229,52 @@ resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
   tags = {
     Name        = "${var.function_name}-throttle-alarm"
     Environment = var.environment
+  }
+}
+
+# Role for EventBridge Scheduler to assume
+resource "aws_iam_role" "scheduler_role" {
+  name = "${var.function_name}-scheduler-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = { Service = "scheduler.amazonaws.com" }
+    }]
+  })
+}
+
+# Policy to allow Scheduler to trigger the Lambda
+resource "aws_iam_role_policy" "scheduler_invoke" {
+  name = "${var.function_name}-scheduler-invoke"
+  role = aws_iam_role.scheduler_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action   = "lambda:InvokeFunction"
+      Effect   = "Allow"
+      Resource = aws_lambda_function.function.arn # Fixed name
+    }]
+  })
+}
+
+# The Daily Schedule
+resource "aws_scheduler_schedule" "daily_run" {
+  name       = "${var.function_name}-daily-schedule"
+  group_name = "default"
+  flexible_time_window { mode = "OFF" }
+
+  schedule_expression          = var.schedule_expression
+  schedule_expression_timezone = var.schedule_timezone
+
+  target {
+    arn      = aws_lambda_function.function.arn # Fixed name
+    role_arn = aws_iam_role.scheduler_role.arn
+    input = jsonencode({
+      "dry_run" : false,
+      "limit"   : 50
+    })
   }
 }

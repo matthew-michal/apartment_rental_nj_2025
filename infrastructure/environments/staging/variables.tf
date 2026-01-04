@@ -80,3 +80,17 @@ variable "image_uri" {
   description = "Full ECR image URI provided by GitHub Actions"
   type        = string
 }
+
+
+variable "daily_prediction_schedule" {
+  description = "Cron expression for the daily prediction job"
+  type        = string
+  default     = "cron(0 9 * * ? *)" # 9:00 AM UTC
+}
+
+variable "schedule_timezone" {
+  description = "Timezone for the schedule"
+  type        = string
+  default     = "America/New_York"
+}
+

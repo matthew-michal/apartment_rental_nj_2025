@@ -210,64 +210,41 @@ module "training_task" {
 }
 
 # Lambda for Daily Predictions
+# Consolidated Lambda Module Call
 module "lambda_daily" {
   source = "../../modules/lambda"
 
+  # Core Identification
   function_name = "apartment-pipeline-daily-predictions-${var.environment}"
   environment   = var.environment
+  project_name  = "apartment-pipeline"
 
-  # image_uri = "${data.aws_ecr_repository.app.repository_url}:latest" #old uri with errors
-  image_uri     = var.image_uri
+  # Resource Config
+  image_uri    = var.image_uri
+  memory_size  = var.daily_lambda_memory
+  timeout      = var.daily_lambda_timeout
 
-  memory_size = var.daily_lambda_memory
-  timeout     = var.daily_lambda_timeout
+  # Scheduler Settings (Matching your new variables)
+  schedule_expression = var.daily_prediction_schedule
+  schedule_timezone   = var.schedule_timezone
 
-  environment_variables = {
-    ENVIRONMENT         = var.environment
-    MLFLOW_TRACKING_URI = module.mlflow_server.mlflow_tracking_uri
-    MLFLOW_BUCKET       = module.mlflow_bucket.bucket_name
-    TRAINING_BUCKET     = module.training_bucket.bucket_name
-    PREDICTIONS_BUCKET  = module.predictions_bucket.bucket_name
-  }
-
-  # Lambda module required variables
+  # REQUIRED: Bucket & Secret Attributes (Fixing the errors in the image)
   mlflow_bucket_name   = module.mlflow_bucket.bucket_name
   mlflow_bucket_arn    = module.mlflow_bucket.bucket_arn
   training_bucket_name = module.training_bucket.bucket_name
   training_bucket_arn  = module.training_bucket.bucket_arn
   secrets_arn          = aws_secretsmanager_secret.api_keys.arn
   dlq_arn              = aws_sqs_queue.dlq.arn
-}
 
-# EventBridge Rule for Daily Predictions
-resource "aws_cloudwatch_event_rule" "daily_predictions" {
-  name                = "${var.environment}-daily-predictions"
-  description         = "Trigger daily predictions at 11 AM EST"
-  schedule_expression = "cron(0 16 * * ? *)" # 11 AM EST = 16:00 UTC
-
-  tags = {
-    Environment = var.environment
-    ManagedBy   = "Terraform"
+  # Environment Variables
+  environment_variables = {
+    ENVIRONMENT         = var.environment
+    MLFLOW_TRACKING_URI = module.mlflow_server.mlflow_tracking_uri
+    SENDER_EMAIL        = "matthew.michal11@gmail.com"
+    RECIPIENT_EMAIL     = "matthew.michal11@gmail.com"
+    # Note: MLFLOW_BUCKET and TRAINING_BUCKET are handled inside the module 
+    # based on the bucket_name variables passed above.
   }
-}
-
-resource "aws_cloudwatch_event_target" "daily_predictions" {
-  rule      = aws_cloudwatch_event_rule.daily_predictions.name
-  target_id = "daily-predictions-lambda"
-  arn       = module.lambda_daily.function_arn
-
-  input = jsonencode({
-    dry_run = true
-    limit   = 100
-  })
-}
-
-resource "aws_lambda_permission" "allow_eventbridge_daily" {
-  statement_id  = "AllowExecutionFromEventBridge"
-  action        = "lambda:InvokeFunction"
-  function_name = module.lambda_daily.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.daily_predictions.arn
 }
 
 # --- VPC Endpoints for Private Connectivity ---

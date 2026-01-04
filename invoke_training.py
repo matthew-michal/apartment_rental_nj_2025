@@ -25,11 +25,30 @@ def trigger_training():
             cluster=CLUSTER_NAME,
             taskDefinition=TASK_DEFINITION,
             launchType='FARGATE',
+            # CHANGE 1: Inject MLflow environment variables
+            overrides={
+                'containerOverrides': [
+                    {
+                        'name': 'training',
+                        'environment': [
+                            {
+                                'name': 'MLFLOW_TRACKING_URI',
+                                'value': 'http://staging-mlflow-alb-1447523732.us-east-1.elb.amazonaws.com'
+                            },
+                            {
+                                'name': 'MLFLOW_EXPERIMENT_NAME',
+                                'value': 'nj-apartment-invoke-training-test'
+                            }
+                        ]
+                    }
+                ]
+            },
             networkConfiguration={
                 'awsvpcConfiguration': {
                     'subnets': SUBNET_IDS,
                     'securityGroups': SECURITY_GROUP_IDS,
-                    'assignPublicIp': 'DISABLED'
+                    # CHANGE 2: Enable Public IP for outbound communication
+                    'assignPublicIp': 'ENABLED' 
                 }
             }
         )

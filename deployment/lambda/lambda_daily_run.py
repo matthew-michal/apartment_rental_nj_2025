@@ -23,6 +23,11 @@ import numpy as np
 import boto3
 import mlflow
 
+import io
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+
 # Add paths for imports
 sys.path.append('/app')
 
@@ -197,90 +202,65 @@ def format_deal_for_email(deal: pd.Series) -> str:
     """.strip()
 
 
-def send_email_alert(good_deals: pd.DataFrame, total_listings: int):
+def send_email_alert(good_deals: pd.DataFrame, all_listings: pd.DataFrame):
     """
-    Send email alert with good deals.
-    
-    Args:
-        good_deals: DataFrame with good deals
-        total_listings: Total number of listings processed
+    Send email alert with summary in body and full results as CSV attachment.
     """
     try:
-        # Get email addresses from secrets
+        # 1. Get Emails (Keeping your logic)
         try:
             sender_email = get_secret('SENDER_EMAIL')
             recipient_email = get_secret('RECIPIENT_EMAIL')
-        except Exception as e:
-            logger.warning(f"Could not get email addresses from secrets: {e}")
-            # Fallback to environment variables
+        except Exception:
             sender_email = os.environ.get('SENDER_EMAIL')
             recipient_email = os.environ.get('RECIPIENT_EMAIL')
-        
+
         if not sender_email or not recipient_email:
-            logger.warning("Email addresses not configured, skipping email alert")
             return
-        
-        # Prepare email content
+
+        # 2. Prepare the Summary Body (Your existing logic)
+        total_listings = len(all_listings)
         if len(good_deals) == 0:
-            subject = f"🏠 No Great Deals Today ({total_listings} listings checked)"
-            body = f"""
-Hello!
-
-Today's apartment scan didn't find any exceptional deals.
-
-📊 Summary:
-- Total listings checked: {total_listings}
-- Good deals found: 0
-- Minimum savings threshold: $100/month
-
-The model will keep monitoring and alert you when better opportunities appear.
-
-Happy house hunting!
-            """.strip()
+            subject = f"🏠 No Great Deals Today ({total_listings} checked)"
+            body_text = f"Hello!\n\nToday's scan didn't find any exceptional deals among {total_listings} listings."
         else:
             subject = f"🎉 {len(good_deals)} Great Apartment Deals Found!"
-            
-            deals_text = "\n\n" + "="*60 + "\n\n".join([
-                format_deal_for_email(deal)
-                for _, deal in good_deals.iterrows()
-            ])
-            
             total_savings = good_deals['price_diff'].sum()
             avg_savings = good_deals['price_diff'].mean()
             
-            body = f"""
-Hello!
+            deals_text = "\n\n" + "="*60 + "\n\n".join([
+                format_deal_for_email(deal) for _, deal in good_deals.iterrows()
+            ])
+            
+            body_text = f"Hello!\n\nFound {len(good_deals)} deals today!\n\n📊 Summary:\- Total listings: {total_listings}\n- Avg savings: ${avg_savings:,.0f}/mo\n\n{deals_text}"
 
-Found {len(good_deals)} great apartment deals today! 🎉
+        # 3. Create the Multipart Message
+        msg = MIMEMultipart('mixed')
+        msg['Subject'] = subject
+        msg['From'] = sender_email
+        msg['To'] = recipient_email
 
-📊 Summary:
-- Total listings checked: {total_listings}
-- Good deals found: {len(good_deals)}
-- Average savings: ${avg_savings:,.0f}/month
-- Total potential savings: ${total_savings:,.0f}/month
+        # Attach Body
+        msg.attach(MIMEText(body_text, 'plain'))
 
-{deals_text}
-
-💡 These apartments are priced significantly below their predicted fair market value based on location, size, and features.
-
-Happy house hunting!
-            """.strip()
+        # 4. Create CSV Attachment from 'all_listings'
+        csv_buffer = io.StringIO()
+        all_listings.to_csv(csv_buffer, index=False)
         
-        # Send email via SES
-        response = ses_client.send_email(
+        attachment = MIMEApplication(csv_buffer.getvalue())
+        attachment.add_header('Content-Disposition', 'attachment', filename='all_nj_listings_today.csv')
+        msg.attach(attachment)
+
+        # 5. Send Raw Email
+        response = ses_client.send_raw_email(
             Source=sender_email,
-            Destination={'ToAddresses': [recipient_email]},
-            Message={
-                'Subject': {'Data': subject},
-                'Body': {'Text': {'Data': body}}
-            }
+            Destinations=[recipient_email],
+            RawMessage={'Data': msg.as_string()}
         )
-        
-        logger.info(f"✅ Email sent successfully (MessageId: {response['MessageId']})")
+        logger.info(f"✅ Email with attachment sent: {response['MessageId']}")
         
     except Exception as e:
         logger.error(f"Failed to send email alert: {e}")
-        # Don't raise - email failure shouldn't fail the whole function
 
 
 def save_results_to_s3(df: pd.DataFrame, good_deals: pd.DataFrame) -> Dict[str, str]:

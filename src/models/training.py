@@ -7,6 +7,7 @@ import json
 import boto3
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import FunctionTransformer
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 import mlflow
 import mlflow.sklearn
@@ -45,7 +46,8 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
         for col in self.columns:
             if col in X.columns:
                 self.encoders[col] = LabelEncoder()
-                self.encoders[col].fit(X[col])
+                # Convert to string to ensure all types are consistent for fit
+                self.encoders[col].fit(X[col].astype(str))
         return self
     
     def transform(self, X):
@@ -53,9 +55,14 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
         for col in self.columns:
             if col in X_copy.columns and col in self.encoders:
                 encoder = self.encoders[col]
+                
+                # Convert to string first to avoid "Categorical" setitem errors
+                X_copy[col] = X_copy[col].astype(str)
+                
                 mask = X_copy[col].isin(encoder.classes_)
                 X_copy.loc[mask, col] = encoder.transform(X_copy.loc[mask, col])
                 X_copy.loc[~mask, col] = 0
+                X_copy[col] = X_copy[col].astype(int)
         return X_copy
 
 # AWS Configuration
@@ -148,11 +155,12 @@ def create_X(df):
     df['lat_long'] = df.latitude.astype(str) + '_' + df.longitude.astype(str)
     df['station'] = df.lat_long.apply(find_station)
     
-    feats = [
-        'latitude', 'longitude', 'station',
-        'propertyType', 'bedrooms', 'bathrooms', 'yearBuilt', 'lotSize'
-    ]
+    # Cast to category to satisfy XGBoost's requirement
+    df['station'] = df['station'].astype('category')
+    df['propertyType'] = df['propertyType'].astype('category')
     
+    feats = ['latitude', 'longitude', 'station', 'propertyType', 
+             'bedrooms', 'bathrooms', 'yearBuilt', 'lotSize']
     return df[feats]
 
 
@@ -188,6 +196,7 @@ def tune_models(X_train, y_train, X_test, y_test):
             
             pipeline = Pipeline([
                 ('encoder', LabelEncoderTransformer()),
+                ('cast_to_float', FunctionTransformer(lambda x: x.astype(float))),
                 ('regressor', model)
             ])
             
