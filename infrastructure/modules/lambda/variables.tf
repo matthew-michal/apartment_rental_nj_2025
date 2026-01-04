@@ -132,3 +132,14 @@ variable "duration_threshold" {
   type        = number
   default     = 60000 # 60 seconds
 }
+
+variable "schedule_expression" {
+  description = "The cron or rate expression for the schedule"
+  type        = string
+}
+
+variable "schedule_timezone" {
+  description = "The timezone for the schedule"
+  type        = string
+  default     = "UTC"
+}
